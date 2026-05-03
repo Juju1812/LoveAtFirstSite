@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Routes, Route, useNavigate, Navigate, useLocation } from 'react-router-dom';
 import { io, Socket } from 'socket.io-client';
 import { useWebRTC } from './useWebRTC';
@@ -25,6 +25,10 @@ import { useAuth } from './AuthContext';
 import { saveConnection, getToken, moderateText } from './api';
 import { Inbox, Conversation } from './components/Messaging';
 import { Events } from './components/Events';
+import { DashboardLayout } from './components/DashboardLayout';
+import { ProfilePage } from './components/ProfilePage';
+import { PreferencesPage } from './components/PreferencesPage';
+import { Likes } from './components/Likes';
 
 const SIGNAL_URL =
   (import.meta.env.VITE_SIGNAL_URL as string | undefined) ??
@@ -48,11 +52,14 @@ export function App() {
       <Route path="/match" element={<Match />} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/signup" element={<SignupPage />} />
-      <Route path="/settings" element={<Settings />} />
-      <Route path="/saved" element={<SavedList />} />
-      <Route path="/messages" element={<Inbox />} />
+      <Route path="/settings" element={<DashLayoutWrapper><Settings /></DashLayoutWrapper>} />
+      <Route path="/saved" element={<DashLayoutWrapper><SavedList /></DashLayoutWrapper>} />
+      <Route path="/messages" element={<DashLayoutWrapper><Inbox /></DashLayoutWrapper>} />
       <Route path="/messages/:id" element={<Conversation />} />
-      <Route path="/events" element={<Events />} />
+      <Route path="/events" element={<DashLayoutWrapper><Events /></DashLayoutWrapper>} />
+      <Route path="/profile" element={<DashLayoutWrapper><ProfilePage /></DashLayoutWrapper>} />
+      <Route path="/preferences" element={<DashLayoutWrapper><PreferencesPage /></DashLayoutWrapper>} />
+      <Route path="/likes" element={<DashLayoutWrapper><Likes /></DashLayoutWrapper>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
@@ -79,7 +86,15 @@ function DashboardPage() {
     markVisited();
     navigate(`/match?topic=${encodeURIComponent(topic)}`);
   }, [navigate]);
-  return <Dashboard onStart={handleStart} />;
+  return (
+    <DashboardLayout>
+      <Dashboard onStart={handleStart} />
+    </DashboardLayout>
+  );
+}
+
+function DashLayoutWrapper({ children }: { children: React.ReactNode }) {
+  return <DashboardLayout>{children}</DashboardLayout>;
 }
 
 function AboutPage() {
@@ -484,14 +499,27 @@ function Match() {
     applyChemistryDelta(nextChemistry(chemistryRef.current, s));
   }, [sendChat, applyChemistryDelta]);
 
-  // Timer math (computed early so callbacks can reference `unlocked`).
+  // Timer math.
   const secondsLeft = useMemo(() => {
     if (!session || phase !== 'live') return session?.timerSeconds ?? 120;
     const elapsed = (now - session.startedAt) / 1000;
     return Math.max(0, Math.ceil(session.timerSeconds - elapsed));
   }, [session, now, phase]);
 
-  const unlocked = phase === 'live' && secondsLeft <= 0;
+  // Pass becomes "Pass" only at full timer end; before that it's "Skip"
+  const passUnlocked = phase === 'live' && secondsLeft <= 0;
+  // Like unlocks 30s into the call
+  const likeUnlockSeconds = 30;
+  const elapsedSec = session && phase === 'live'
+    ? Math.floor((now - session.startedAt) / 1000)
+    : 0;
+  const likeUnlocked = phase === 'live' && elapsedSec >= likeUnlockSeconds;
+  const likeUnlockInSeconds = phase === 'live'
+    ? Math.max(0, likeUnlockSeconds - elapsedSec)
+    : likeUnlockSeconds;
+
+  // Backward compat for handlePass / handleLike below
+  const unlocked = passUnlocked;
 
   const handlePass = useCallback(() => {
     if (!session) return;
@@ -508,10 +536,10 @@ function Match() {
   }, [session, unlocked]);
 
   const handleLike = useCallback(() => {
-    if (!session || !unlocked) return;
+    if (!session || !likeUnlocked) return;
     setSwiped('right');
     socketRef.current?.emit('swipe', { sessionId: session.sessionId, direction: 'right' });
-  }, [session, unlocked]);
+  }, [session, likeUnlocked]);
 
   const report = useCallback(() => {
     if (!session) return;
@@ -663,7 +691,9 @@ function Match() {
 
       <footer className="footer">
         <Controls
-          unlocked={unlocked}
+          passUnlocked={passUnlocked}
+          likeUnlocked={likeUnlocked}
+          likeUnlockInSeconds={likeUnlockInSeconds}
           swiped={swiped}
           peerLikedYou={peerLikedYou}
           onPass={handlePass}

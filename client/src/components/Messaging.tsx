@@ -27,70 +27,70 @@ export function Inbox() {
 
   if (!user) {
     return (
-      <div className="settings-page">
-        <header className="settings-nav">
-          <Link to="/" className="settings-back">← Home</Link>
-          <h1>Messages</h1>
-        </header>
-        <main className="settings-main">
-          <div className="saved-empty">
-            <div className="saved-empty-icon">🔒</div>
-            <h2>Sign in to message your matches</h2>
-            <p>Conversations live on your account so you can read and reply from any device.</p>
-            <div className="settings-actions">
-              <Link to="/login" className="settings-secondary-btn">Sign in</Link>
-              <Link to="/signup" className="settings-save-btn">Create account</Link>
-            </div>
+      <div className="dash-panel">
+        <div className="dash-panel-header">
+          <div>
+            <div className="dash-panel-eyebrow">Messages</div>
+            <h1 className="dash-panel-title">Sign in to message your matches</h1>
+            <p className="dash-panel-sub">Conversations live on your account so you can read them from any device.</p>
           </div>
-        </main>
+        </div>
+        <div className="saved-empty">
+          <div className="saved-empty-icon">🔒</div>
+          <div className="settings-actions">
+            <Link to="/login" className="settings-secondary-btn">Sign in</Link>
+            <Link to="/signup" className="settings-save-btn">Create account</Link>
+          </div>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="settings-page">
-      <header className="settings-nav">
-        <Link to="/" className="settings-back">← Home</Link>
-        <h1>Messages</h1>
-      </header>
-      <main className="settings-main">
-        {error && <div className="auth-error">{error}</div>}
-        {convos == null ? (
-          <div className="saved-empty"><p>Loading…</p></div>
-        ) : convos.length === 0 ? (
-          <div className="saved-empty">
-            <div className="saved-empty-icon">💬</div>
-            <h2>No conversations yet</h2>
-            <p>When you both swipe right on someone, a conversation opens automatically — keep talking after the call ends.</p>
-          </div>
-        ) : (
-          <ul className="convo-list">
-            {convos.map(c => (
-              <li key={c.id}>
-                <Link className={`convo-item ${c.unread ? 'convo-item-unread' : ''}`} to={`/messages/${c.id}`}>
-                  {c.peer_photo ? (
-                    <img className="convo-photo" src={c.peer_photo} alt="" />
-                  ) : (
-                    <div className="convo-photo convo-photo-empty">👤</div>
-                  )}
-                  <div className="convo-meta">
-                    <div className="convo-row">
-                      <span className="convo-name">{c.peer_name || 'Anonymous'}</span>
-                      <span className="convo-time">{timeAgo(c.last_msg_at)}</span>
-                    </div>
-                    <div className="convo-preview">
-                      {c.last_body
-                        ? (c.last_sender === user.id ? 'You: ' : '') + c.last_body
-                        : <em>Say hi 👋</em>}
-                    </div>
+    <div className="dash-panel">
+      <div className="dash-panel-header">
+        <div>
+          <div className="dash-panel-eyebrow">Messages</div>
+          <h1 className="dash-panel-title">Inbox</h1>
+          <p className="dash-panel-sub">Conversations open automatically when you both swipe right.</p>
+        </div>
+      </div>
+      {error && <div className="auth-error">{error}</div>}
+      {convos == null ? (
+        <div className="saved-empty"><p>Loading…</p></div>
+      ) : convos.length === 0 ? (
+        <div className="saved-empty">
+          <div className="saved-empty-icon">💬</div>
+          <h2>No conversations yet</h2>
+          <p>When you both swipe right on someone, a conversation opens automatically.</p>
+        </div>
+      ) : (
+        <ul className="convo-list">
+          {convos.map(c => (
+            <li key={c.id}>
+              <Link className={`convo-item ${c.unread ? 'convo-item-unread' : ''}`} to={`/messages/${c.id}`}>
+                {c.peer_photo ? (
+                  <img className="convo-photo" src={c.peer_photo} alt="" />
+                ) : (
+                  <div className="convo-photo convo-photo-empty">👤</div>
+                )}
+                <div className="convo-meta">
+                  <div className="convo-row">
+                    <span className="convo-name">{c.peer_name || 'Anonymous'}</span>
+                    <span className="convo-time">{timeAgo(c.last_msg_at)}</span>
                   </div>
-                  {c.unread > 0 && <span className="convo-unread-dot" />}
-                </Link>
-              </li>
-            ))}
-          </ul>
-        )}
-      </main>
+                  <div className="convo-preview">
+                    {c.last_body
+                      ? (c.last_sender === user.id ? 'You: ' : '') + c.last_body
+                      : <em>Say hi 👋</em>}
+                  </div>
+                </div>
+                {c.unread > 0 && <span className="convo-unread-dot" />}
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

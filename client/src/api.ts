@@ -155,3 +155,35 @@ export async function getInsights(): Promise<{ history: any[]; summary: Insights
 export async function moderateText(text: string): Promise<{ flagged: boolean; categories?: string[] }> {
   return apiFetch('/api/moderate-text', { method: 'POST', body: JSON.stringify({ text }) });
 }
+
+// ---- Likes ----
+export interface LikeEntry {
+  user_id: number;
+  topic: string | null;
+  chemistry: number | null;
+  liked_at: number;
+  name: string | null;
+  photo: string | null;
+  bio: string | null;
+  vibes: string | null;
+  age: number | null;
+  i_liked_them?: number;
+  they_liked_me?: number;
+}
+export interface LikesResponse {
+  received_only: LikeEntry[];
+  mutual: LikeEntry[];
+  given_only: LikeEntry[];
+}
+export async function listLikes(): Promise<LikesResponse> {
+  return apiFetch('/api/likes');
+}
+export async function likeBack(userId: number): Promise<{ conversationId: number | null }> {
+  return apiFetch(`/api/likes/${userId}/like-back`, { method: 'POST' });
+}
+export async function dismissLike(userId: number): Promise<void> {
+  await apiFetch(`/api/likes/${userId}/dismiss`, { method: 'POST' });
+}
+export async function unlikeUser(userId: number): Promise<void> {
+  await apiFetch(`/api/likes/${userId}`, { method: 'DELETE' });
+}

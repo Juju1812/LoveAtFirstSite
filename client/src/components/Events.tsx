@@ -34,27 +34,25 @@ export function Events() {
   }
 
   return (
-    <div className="settings-page">
-      <header className="settings-nav">
-        <Link to="/" className="settings-back">← Home</Link>
-        <h1>Events</h1>
-      </header>
-      <main className="settings-main">
-        <p className="events-intro">
-          Scheduled rooms — match only with people who RSVP'd to the same event during the time window.
-          Better than random matching at 2am.
-        </p>
-        {error && <div className="auth-error">{error}</div>}
-        {events == null ? (
-          <div className="saved-empty"><p>Loading…</p></div>
-        ) : events.length === 0 ? (
-          <div className="saved-empty">
-            <div className="saved-empty-icon">📆</div>
-            <h2>No events scheduled</h2>
-            <p>Check back soon — we run themed nights weekly.</p>
-          </div>
-        ) : (
-          <ul className="event-list">
+    <div className="dash-panel">
+      <div className="dash-panel-header">
+        <div>
+          <div className="dash-panel-eyebrow">Events</div>
+          <h1 className="dash-panel-title">Themed nights</h1>
+          <p className="dash-panel-sub">RSVP and you'll only match with other attendees during the event window. Better than random.</p>
+        </div>
+      </div>
+      {error && <div className="auth-error">{error}</div>}
+      {events == null ? (
+        <div className="saved-empty"><p>Loading…</p></div>
+      ) : events.length === 0 ? (
+        <div className="saved-empty">
+          <div className="saved-empty-icon">📆</div>
+          <h2>No events scheduled</h2>
+          <p>Check back soon — we run themed nights weekly.</p>
+        </div>
+      ) : (
+        <ul className="event-list">
             {events.map(ev => {
               const live = Date.now() >= ev.starts_at && Date.now() < ev.ends_at;
               return (
@@ -83,7 +81,6 @@ export function Events() {
             })}
           </ul>
         )}
-      </main>
     </div>
   );
 }

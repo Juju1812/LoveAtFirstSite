@@ -140,6 +140,21 @@ db.exec(`
     reviewed INTEGER DEFAULT 0,
     created_at INTEGER NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS likes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    liker_user_id INTEGER NOT NULL,
+    liked_user_id INTEGER NOT NULL,
+    topic TEXT,
+    chemistry INTEGER,
+    liked_at INTEGER NOT NULL,
+    dismissed INTEGER DEFAULT 0,
+    UNIQUE(liker_user_id, liked_user_id),
+    FOREIGN KEY (liker_user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (liked_user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_likes_liked ON likes(liked_user_id, dismissed);
+  CREATE INDEX IF NOT EXISTS idx_likes_liker ON likes(liker_user_id);
 `);
 
 // Seed a couple of demo events if the table is empty so the UI has data
@@ -482,4 +497,73 @@ export function recordContentReport(row) {
 
 export function getOpenReports() {
   return listOpenReports.all();
+}
+
+// ---- Likes ----
+const insertLike = db.prepare(`
+  INSERT INTO likes (liker_user_id, liked_user_id, topic, chemistry, liked_at)
+  VALUES (?, ?, ?, ?, ?)
+  ON CONFLICT(liker_user_id, liked_user_id) DO UPDATE SET
+    topic = excluded.topic,
+    chemistry = excluded.chemistry,
+    liked_at = excluded.liked_at,
+    dismissed = 0
+`);
+const dismissLikeStmt = db.prepare(
+  'UPDATE likes SET dismissed = 1 WHERE liker_user_id = ? AND liked_user_id = ?'
+);
+const undoLikeStmt = db.prepare(
+  'DELETE FROM likes WHERE liker_user_id = ? AND liked_user_id = ?'
+);
+const isReverseLike = db.prepare(
+  'SELECT 1 FROM likes WHERE liker_user_id = ? AND liked_user_id = ? AND dismissed = 0'
+);
+const likesReceivedFor = db.prepare(`
+  SELECT
+    l.liker_user_id AS user_id,
+    l.topic, l.chemistry, l.liked_at,
+    up.name, up.photo, up.bio, up.vibes, up.age,
+    EXISTS(SELECT 1 FROM likes l2
+            WHERE l2.liker_user_id = ? AND l2.liked_user_id = l.liker_user_id
+              AND l2.dismissed = 0) AS i_liked_them
+  FROM likes l
+  LEFT JOIN user_profiles up ON up.user_id = l.liker_user_id
+  WHERE l.liked_user_id = ? AND l.dismissed = 0
+  ORDER BY l.liked_at DESC
+`);
+const likesGivenBy = db.prepare(`
+  SELECT
+    l.liked_user_id AS user_id,
+    l.topic, l.chemistry, l.liked_at,
+    up.name, up.photo, up.bio, up.vibes, up.age,
+    EXISTS(SELECT 1 FROM likes l2
+            WHERE l2.liker_user_id = l.liked_user_id AND l2.liked_user_id = ?
+              AND l2.dismissed = 0) AS they_liked_me
+  FROM likes l
+  LEFT JOIN user_profiles up ON up.user_id = l.liked_user_id
+  WHERE l.liker_user_id = ? AND l.dismissed = 0
+  ORDER BY l.liked_at DESC
+`);
+
+export function recordLike(likerId, likedId, opts = {}) {
+  insertLike.run(likerId, likedId, opts.topic ?? null, Math.round(opts.chemistry ?? 50), Date.now());
+  // Detect reverse: did `likedId` already like `likerId`?
+  return !!isReverseLike.get(likedId, likerId);
+}
+
+export function dismissLike(likerId, likedId) {
+  // Mark "they liked you" as dismissed (you don't want to see them anymore)
+  dismissLikeStmt.run(likerId, likedId);
+}
+
+export function undoMyLike(likerId, likedId) {
+  undoLikeStmt.run(likerId, likedId);
+}
+
+export function getLikesReceived(userId) {
+  return likesReceivedFor.all(userId, userId);
+}
+
+export function getLikesGiven(userId) {
+  return likesGivenBy.all(userId, userId);
 }

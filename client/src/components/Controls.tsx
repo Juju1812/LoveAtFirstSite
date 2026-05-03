@@ -1,5 +1,7 @@
 interface Props {
-  unlocked: boolean;
+  passUnlocked: boolean;       // true once Pass becomes "Pass" (after timer ends)
+  likeUnlocked: boolean;       // true once Like becomes clickable (30s in)
+  likeUnlockInSeconds: number; // countdown until Like unlocks (0 = unlocked)
   swiped: 'left' | 'right' | null;
   peerLikedYou: boolean;
   onPass: () => void;
@@ -7,11 +9,12 @@ interface Props {
 }
 
 export function Controls({
-  unlocked, swiped, peerLikedYou,
+  passUnlocked, likeUnlocked, likeUnlockInSeconds,
+  swiped, peerLikedYou,
   onPass, onLike
 }: Props) {
   const passDisabled = !!swiped;
-  const likeDisabled = !unlocked || !!swiped;
+  const likeDisabled = !likeUnlocked || !!swiped;
   return (
     <div className="controls">
       <button
@@ -19,10 +22,10 @@ export function Controls({
         onClick={onPass}
         disabled={passDisabled}
         aria-label="Pass on this person"
-        title={unlocked ? 'Pass — find someone new' : 'Skip — find someone else now'}
+        title={passUnlocked ? 'Pass — find someone new' : 'Skip — find someone else now'}
       >
         <span className="ctrl-icon">✕</span>
-        <span className="ctrl-label">{unlocked ? 'Pass' : 'Skip'}</span>
+        <span className="ctrl-label">{passUnlocked ? 'Pass' : 'Skip'}</span>
       </button>
 
       <button
@@ -30,13 +33,24 @@ export function Controls({
         onClick={onLike}
         disabled={likeDisabled}
         aria-label="Like this person"
-        title={unlocked ? 'Like — both right = match' : "Like unlocks once you've spent 2 minutes together"}
+        title={likeUnlocked
+          ? 'Like — both right = match'
+          : `Like unlocks in ${likeUnlockInSeconds}s — give it a moment`}
       >
-        <span className="ctrl-icon">{unlocked ? '♥' : '🔒'}</span>
-        <span className="ctrl-label">{unlocked ? 'Like' : 'Locked'}</span>
+        {likeUnlocked ? (
+          <>
+            <span className="ctrl-icon">♥</span>
+            <span className="ctrl-label">Like</span>
+          </>
+        ) : (
+          <>
+            <span className="ctrl-icon">🔒</span>
+            <span className="ctrl-label">{likeUnlockInSeconds}s</span>
+          </>
+        )}
       </button>
 
-      {peerLikedYou && unlocked && !swiped && (
+      {peerLikedYou && likeUnlocked && !swiped && (
         <div className="hint-bubble">They liked you 👀</div>
       )}
       {swiped === 'right' && (

@@ -12,7 +12,8 @@ import {
   checkParticipant, markConversationRead,
   getUpcomingEvents, rsvpEvent, unrsvpEvent, getActiveEventForUser,
   recordCallHistory, getMyHistory,
-  recordContentReport, getOpenReports
+  recordContentReport, getOpenReports,
+  recordLike, dismissLike, undoMyLike, getLikesReceived, getLikesGiven
 } from './db.js';
 import {
   hashPassword, verifyPassword, signToken,
@@ -21,6 +22,7 @@ import {
 
 const PORT = process.env.PORT || 3001;
 const TIMER_SECONDS = 120;
+const LIKE_UNLOCK_SECONDS = 30;
 
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || '*')
   .split(',')
@@ -206,6 +208,54 @@ app.delete('/api/events/:id/rsvp', requireAuth, (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'Bad id' });
   unrsvpEvent(id, req.userId);
+  res.json({ ok: true });
+});
+
+// ---- Likes ----
+app.get('/api/likes', requireAuth, (req, res) => {
+  const received = getLikesReceived(req.userId);
+  const given = getLikesGiven(req.userId);
+  // Mutual = received entries where i_liked_them = 1 (or given where they_liked_me = 1)
+  const mutualUserIds = new Set(received.filter(r => r.i_liked_them).map(r => r.user_id));
+  res.json({
+    received_only: received.filter(r => !r.i_liked_them),
+    mutual: received.filter(r => r.i_liked_them),
+    given_only: given.filter(g => !g.they_liked_me && !mutualUserIds.has(g.user_id))
+  });
+});
+
+app.post('/api/likes/:userId/like-back', requireAuth, (req, res) => {
+  const otherId = parseInt(req.params.userId, 10);
+  if (!Number.isFinite(otherId) || otherId === req.userId) {
+    return res.status(400).json({ error: 'Invalid user' });
+  }
+  if (!getUserById(otherId)) return res.status(404).json({ error: 'User not found' });
+  // Confirm they liked me first; otherwise nothing to "like back"
+  const theirLike = getLikesReceived(req.userId).find(r => r.user_id === otherId);
+  if (!theirLike) return res.status(404).json({ error: 'They did not like you' });
+  // Record my like and create a conversation
+  const wasReverse = recordLike(req.userId, otherId, {
+    topic: theirLike.topic,
+    chemistry: theirLike.chemistry
+  });
+  let conversationId = null;
+  try { conversationId = ensureConversation(req.userId, otherId); } catch { /* noop */ }
+  res.json({ ok: true, conversationId, mutual: wasReverse || true });
+});
+
+app.post('/api/likes/:userId/dismiss', requireAuth, (req, res) => {
+  const otherId = parseInt(req.params.userId, 10);
+  if (!Number.isFinite(otherId)) return res.status(400).json({ error: 'Bad id' });
+  // The other person liked me (their like on me). Mark as dismissed.
+  dismissLike(otherId, req.userId);
+  res.json({ ok: true });
+});
+
+app.delete('/api/likes/:userId', requireAuth, (req, res) => {
+  const otherId = parseInt(req.params.userId, 10);
+  if (!Number.isFinite(otherId)) return res.status(400).json({ error: 'Bad id' });
+  // Undo my own like
+  undoMyLike(req.userId, otherId);
   res.json({ ok: true });
 });
 
@@ -487,11 +537,13 @@ function pairUp() {
       bSock.join(sessionId);
 
       aSock.emit('paired', {
-        sessionId, timerSeconds: TIMER_SECONDS, topic: session.topic,
+        sessionId, timerSeconds: TIMER_SECONDS, likeUnlockSeconds: LIKE_UNLOCK_SECONDS,
+        topic: session.topic,
         peerId: b.socketId, role: 'initiator', peerUserId: b.userId ?? null
       });
       bSock.emit('paired', {
-        sessionId, timerSeconds: TIMER_SECONDS, topic: session.topic,
+        sessionId, timerSeconds: TIMER_SECONDS, likeUnlockSeconds: LIKE_UNLOCK_SECONDS,
+        topic: session.topic,
         peerId: a.socketId, role: 'receiver', peerUserId: a.userId ?? null
       });
 
@@ -623,7 +675,11 @@ io.on('connection', (socket) => {
   socket.on('swipe', ({ sessionId, direction }) => {
     const session = sessions.get(sessionId);
     if (!session || !session.users.includes(socket.id)) return;
-    if (Date.now() < session.timerUnlocksAt) return; // can't swipe yet
+    const now = Date.now();
+    const likeUnlocksAt = session.startedAt + LIKE_UNLOCK_SECONDS * 1000;
+    // Pass requires full timer; Like requires 30s
+    if (direction === 'left' && now < session.timerUnlocksAt) return;
+    if (direction === 'right' && now < likeUnlocksAt) return;
 
     session.swipes[socket.id] = direction; // 'left' or 'right'
 
@@ -638,6 +694,20 @@ io.on('connection', (socket) => {
     // Right swipe: notify peer we liked them.
     const peer = partnerOf(session, socket.id);
     io.to(peer).emit('peer-swiped-right');
+
+    // Persist the like for logged-in users (independent of mutual outcome)
+    try {
+      const myIdx = session.users[0] === socket.id ? 0 : 1;
+      const peerIdx = 1 - myIdx;
+      const myUid = session.userIds?.[myIdx];
+      const peerUid = session.userIds?.[peerIdx];
+      if (myUid && peerUid) {
+        recordLike(myUid, peerUid, {
+          topic: session.topic,
+          chemistry: session.chemistry
+        });
+      }
+    } catch (err) { console.warn('like record failed', err); }
 
     const both = session.users.every(uid => session.swipes[uid] === 'right');
     if (both && !session.matched) {
