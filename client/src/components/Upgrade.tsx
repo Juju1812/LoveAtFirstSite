@@ -124,7 +124,8 @@ export function Upgrade() {
       </div>
 
       <p className="upgrade-fineprint">
-        Secure payment via Stripe. Cancel any time from <strong>Settings → Manage subscription</strong>.
+        Secure payment via Stripe. Cancel any time from <strong>Settings → Manage subscription</strong>.<br />
+        Have a promo code? You'll see <strong>"Add promotion code"</strong> on the checkout page.
       </p>
     </div>
   );
