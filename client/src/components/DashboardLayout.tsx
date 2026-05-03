@@ -64,12 +64,24 @@ export function DashboardLayout({ children }: Props) {
         <div className="dl-user-block">
           {user ? (
             <>
+              {user.premium ? (
+                <Link to="/upgrade" className="dl-premium-pill dl-premium-pill-on">
+                  ✨ Glimpse+
+                </Link>
+              ) : (
+                <Link to="/upgrade" className="dl-premium-pill">
+                  ✨ Get Glimpse+
+                </Link>
+              )}
               <div className="dl-user">
                 {profile?.photo
                   ? <img src={profile.photo} alt="" className="dl-user-pic" />
                   : <div className="dl-user-pic dl-user-pic-empty">👤</div>}
                 <div className="dl-user-meta">
-                  <div className="dl-user-name">{profile?.name || 'You'}</div>
+                  <div className="dl-user-name">
+                    {profile?.name || 'You'}
+                    {user.premium && <span className="dl-user-premium" title="Glimpse+ member">✨</span>}
+                  </div>
                   <div className="dl-user-email">{user.email}</div>
                 </div>
               </div>

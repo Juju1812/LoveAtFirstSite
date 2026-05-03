@@ -13,8 +13,11 @@ import {
   getUpcomingEvents, rsvpEvent, unrsvpEvent, getActiveEventForUser,
   recordCallHistory, getMyHistory,
   recordContentReport, getOpenReports,
-  recordLike, dismissLike, undoMyLike, getLikesReceived, getLikesGiven
+  recordLike, dismissLike, undoMyLike, getLikesReceived, getLikesGiven,
+  setUserStripeCustomer, updateSubscriptionStatus, getUserByStripeCustomer,
+  getFullUser, isUserPremium
 } from './db.js';
+import Stripe from 'stripe';
 import {
   hashPassword, verifyPassword, signToken,
   authMiddleware, requireAuth
@@ -36,6 +39,64 @@ app.use(cors({
   credentials: true,
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
+
+// ---- Stripe init (optional — premium features disabled if not configured) ----
+const STRIPE_KEY = process.env.STRIPE_SECRET_KEY;
+const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID;
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
+const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || 'https://glimpse.dating';
+const stripe = STRIPE_KEY ? new Stripe(STRIPE_KEY) : null;
+if (!stripe) {
+  console.warn('[stripe] STRIPE_SECRET_KEY not set — Glimpse+ disabled.');
+}
+
+// Webhook MUST receive raw body for signature verification — register BEFORE express.json()
+app.post('/api/billing/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  if (!stripe || !STRIPE_WEBHOOK_SECRET) {
+    return res.status(503).json({ error: 'billing not configured' });
+  }
+  let event;
+  try {
+    const sig = req.headers['stripe-signature'];
+    event = stripe.webhooks.constructEvent(req.body, sig, STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    console.warn('Stripe webhook signature failed', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  try {
+    switch (event.type) {
+      case 'checkout.session.completed': {
+        const session = event.data.object;
+        const customerId = session.customer;
+        const userId = session.client_reference_id ? Number(session.client_reference_id) : null;
+        if (userId && customerId) {
+          setUserStripeCustomer(userId, customerId);
+        }
+        // Subscription status will arrive via subscription.created/updated
+        break;
+      }
+      case 'customer.subscription.created':
+      case 'customer.subscription.updated':
+      case 'customer.subscription.deleted': {
+        const sub = event.data.object;
+        const customerId = sub.customer;
+        updateSubscriptionStatus(
+          customerId,
+          sub.status,
+          sub.current_period_end ?? null
+        );
+        break;
+      }
+      // invoice.paid / invoice.payment_failed are useful for analytics; ignore for now
+    }
+    res.json({ received: true });
+  } catch (err) {
+    console.error('webhook handler failed', err);
+    res.status(500).json({ error: 'webhook handler failed' });
+  }
+});
+
 app.use(express.json({ limit: '600kb' })); // photos as base64 can be ~400KB
 app.use(authMiddleware);
 
@@ -85,7 +146,101 @@ app.get('/api/me', requireAuth, (req, res) => {
   const user = getUserById(req.userId);
   if (!user) return res.status(404).json({ error: 'User not found' });
   const profile = getUserProfile(req.userId);
-  res.json({ user: { id: user.id, email: user.email }, profile });
+  const premium = isUserPremium(req.userId);
+  res.json({
+    user: { id: user.id, email: user.email, premium },
+    profile
+  });
+});
+
+// ---- Billing: Checkout + Portal ----
+app.post('/api/billing/checkout', requireAuth, async (req, res) => {
+  if (!stripe || !STRIPE_PRICE_ID) {
+    return res.status(503).json({ error: 'Glimpse+ is not configured yet.' });
+  }
+  try {
+    const u = getFullUser(req.userId);
+    if (!u) return res.status(404).json({ error: 'User not found' });
+
+    let customerId = u.stripe_customer_id;
+    if (!customerId) {
+      const customer = await stripe.customers.create({
+        email: u.email,
+        metadata: { glimpse_user_id: String(u.id) }
+      });
+      customerId = customer.id;
+      setUserStripeCustomer(u.id, customerId);
+    }
+
+    const session = await stripe.checkout.sessions.create({
+      mode: 'subscription',
+      customer: customerId,
+      line_items: [{ price: STRIPE_PRICE_ID, quantity: 1 }],
+      client_reference_id: String(u.id),
+      success_url: `${PUBLIC_BASE_URL}/upgrade?status=success&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${PUBLIC_BASE_URL}/upgrade?status=cancelled`,
+      allow_promotion_codes: true
+    });
+
+    res.json({ url: session.url });
+  } catch (err) {
+    console.error('checkout failed', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/billing/portal', requireAuth, async (req, res) => {
+  if (!stripe) return res.status(503).json({ error: 'billing not configured' });
+  try {
+    const u = getFullUser(req.userId);
+    if (!u || !u.stripe_customer_id) {
+      return res.status(400).json({ error: 'No active subscription to manage' });
+    }
+    const session = await stripe.billingPortal.sessions.create({
+      customer: u.stripe_customer_id,
+      return_url: `${PUBLIC_BASE_URL}/settings`
+    });
+    res.json({ url: session.url });
+  } catch (err) {
+    console.error('portal failed', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Replay (premium feature) ----
+// Lets a premium user undo their last 'you-rejected' from call_history within 24h.
+// On undo, the rejected user becomes likeable again — we record a like so they
+// show up in your "You liked" feed and trigger a mutual if they liked you.
+app.post('/api/billing/replay', requireAuth, (req, res) => {
+  if (!isUserPremium(req.userId)) {
+    return res.status(403).json({ error: 'Glimpse+ required' });
+  }
+  // Find most recent rejection in last 24h
+  const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
+  const recent = db.prepare(`
+    SELECT id, peer_user_id, topic, avg_chemistry, ended_at
+    FROM call_history
+    WHERE user_id = ? AND you_swiped = 'left' AND ended_at > ?
+    ORDER BY ended_at DESC LIMIT 1
+  `).get(req.userId, oneDayAgo);
+  if (!recent || !recent.peer_user_id) {
+    return res.status(404).json({ error: "Nothing to replay — you haven't passed in the last 24h." });
+  }
+  // Flip the swipe in history (cosmetic — doesn't affect anything)
+  db.prepare(`UPDATE call_history SET you_swiped = 'right' WHERE id = ?`).run(recent.id);
+  // Record a like (will be picked up if they also liked us)
+  recordLike(req.userId, recent.peer_user_id, {
+    topic: recent.topic, chemistry: recent.avg_chemistry
+  });
+  // If reverse like exists, ensure conversation
+  let conversationId = null;
+  const reverse = db.prepare(
+    'SELECT 1 FROM likes WHERE liker_user_id = ? AND liked_user_id = ? AND dismissed = 0'
+  ).get(recent.peer_user_id, req.userId);
+  if (reverse) {
+    try { conversationId = ensureConversation(req.userId, recent.peer_user_id); } catch {}
+  }
+  res.json({ ok: true, peerUserId: recent.peer_user_id, mutual: !!reverse, conversationId });
 });
 
 app.put('/api/profile', requireAuth, (req, res) => {
@@ -348,7 +503,9 @@ app.post('/api/coach', async (req, res) => {
   // Light per-IP throttle to keep costs sane.
   const ip = req.ip || req.socket?.remoteAddress || 'unknown';
   const last = lastCoachByIp.get(ip) || 0;
-  if (Date.now() - last < COACH_RATE_MS) {
+  // Premium users skip the rate limit
+  const premium = req.userId ? isUserPremium(req.userId) : false;
+  if (!premium && Date.now() - last < COACH_RATE_MS) {
     return res.json({ tip: null, reason: 'rate-limited' });
   }
   lastCoachByIp.set(ip, Date.now());
@@ -641,8 +798,18 @@ io.on('connection', (socket) => {
     } : null;
 
     const eventId = socket.userId ? getActiveEventForUser(socket.userId) : null;
-    queue.push({ socketId: socket.id, topic, prefs, userId: socket.userId, eventId });
-    socket.emit('queued', { position: queue.length, eventId });
+    const isPremium = socket.userId ? isUserPremium(socket.userId) : false;
+    const entry = { socketId: socket.id, topic, prefs, userId: socket.userId, eventId, isPremium, joinedAt: Date.now() };
+    // Premium users: insert at the front of the queue so they get matched first
+    if (isPremium) {
+      // Find the position: after other premium users but before non-premium
+      let insertAt = 0;
+      while (insertAt < queue.length && queue[insertAt].isPremium) insertAt++;
+      queue.splice(insertAt, 0, entry);
+    } else {
+      queue.push(entry);
+    }
+    socket.emit('queued', { position: queue.findIndex(q => q.socketId === socket.id) + 1, eventId });
     pairUp();
   });
 

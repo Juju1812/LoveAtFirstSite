@@ -11,6 +11,7 @@ interface AuthState {
   login: (email: string, password: string) => Promise<void>;
   logout: () => void;
   setProfile: (p: Profile) => Promise<void>;
+  refresh: () => Promise<void>;
 }
 
 const Ctx = createContext<AuthState | null>(null);
@@ -78,8 +79,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const refresh = useCallback(async () => {
+    if (!getToken()) return;
+    try {
+      const { user, profile } = await fetchMe();
+      setUser(user);
+      if (profile) setProfileState(profile);
+    } catch { /* noop */ }
+  }, []);
+
   return (
-    <Ctx.Provider value={{ user, profile, loading, signup, login, logout, setProfile }}>
+    <Ctx.Provider value={{ user, profile, loading, signup, login, logout, setProfile, refresh }}>
       {children}
     </Ctx.Provider>
   );

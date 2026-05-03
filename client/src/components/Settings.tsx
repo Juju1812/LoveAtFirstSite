@@ -1,8 +1,23 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
+import { openBillingPortal } from '../api';
 
 export function Settings() {
   const { user, profile } = useAuth();
+  const [billingBusy, setBillingBusy] = useState(false);
+  const [billingError, setBillingError] = useState<string | null>(null);
+
+  async function manageSubscription() {
+    setBillingBusy(true); setBillingError(null);
+    try {
+      const { url } = await openBillingPortal();
+      window.location.href = url;
+    } catch (err: any) {
+      setBillingError(err.message ?? 'Could not open billing portal');
+      setBillingBusy(false);
+    }
+  }
 
   return (
     <div className="dash-panel">
@@ -24,6 +39,26 @@ export function Settings() {
             <Link to="/login" className="settings-secondary-btn">Sign in</Link>
             <Link to="/signup" className="settings-save-btn">Create account</Link>
           </div>
+        </div>
+      )}
+
+      {/* Subscription */}
+      {user && (
+        <div className="settings-section">
+          <div className="settings-section-header">
+            <h2>Subscription {user.premium && <span className="verify-badge verify-badge-on" style={{ marginLeft: 8, verticalAlign: 'middle' }}>✨ Glimpse+</span>}</h2>
+            <p>{user.premium
+              ? 'You\'re on Glimpse+. Manage your plan, payment method, or cancel anytime.'
+              : 'Get Glimpse+ for priority matching, replay, unlimited AI coach, and the premium badge.'}</p>
+          </div>
+          {billingError && <div className="auth-error">{billingError}</div>}
+          {user.premium ? (
+            <button className="settings-secondary-btn" onClick={manageSubscription} disabled={billingBusy} style={{ cursor: 'pointer' }}>
+              {billingBusy ? 'Opening…' : 'Manage subscription'}
+            </button>
+          ) : (
+            <Link to="/upgrade" className="settings-save-btn">Get Glimpse+</Link>
+          )}
         </div>
       )}
 

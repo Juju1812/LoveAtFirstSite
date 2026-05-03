@@ -29,6 +29,7 @@ import { DashboardLayout } from './components/DashboardLayout';
 import { ProfilePage } from './components/ProfilePage';
 import { PreferencesPage } from './components/PreferencesPage';
 import { Likes } from './components/Likes';
+import { Upgrade } from './components/Upgrade';
 
 const SIGNAL_URL =
   (import.meta.env.VITE_SIGNAL_URL as string | undefined) ??
@@ -60,6 +61,7 @@ export function App() {
       <Route path="/profile" element={<DashLayoutWrapper><ProfilePage /></DashLayoutWrapper>} />
       <Route path="/preferences" element={<DashLayoutWrapper><PreferencesPage /></DashLayoutWrapper>} />
       <Route path="/likes" element={<DashLayoutWrapper><Likes /></DashLayoutWrapper>} />
+      <Route path="/upgrade" element={<DashLayoutWrapper><Upgrade /></DashLayoutWrapper>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

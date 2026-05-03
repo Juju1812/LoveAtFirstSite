@@ -9,6 +9,7 @@ const TOKEN_KEY = 'glimpse:auth:token';
 export interface User {
   id: number;
   email: string;
+  premium?: boolean;
 }
 
 export function getToken(): string | null {
@@ -154,6 +155,17 @@ export async function getInsights(): Promise<{ history: any[]; summary: Insights
 // ---- Moderation ----
 export async function moderateText(text: string): Promise<{ flagged: boolean; categories?: string[] }> {
   return apiFetch('/api/moderate-text', { method: 'POST', body: JSON.stringify({ text }) });
+}
+
+// ---- Billing ----
+export async function startCheckout(): Promise<{ url: string }> {
+  return apiFetch('/api/billing/checkout', { method: 'POST' });
+}
+export async function openBillingPortal(): Promise<{ url: string }> {
+  return apiFetch('/api/billing/portal', { method: 'POST' });
+}
+export async function replayLastPass(): Promise<{ ok: boolean; peerUserId: number; mutual: boolean; conversationId: number | null }> {
+  return apiFetch('/api/billing/replay', { method: 'POST' });
 }
 
 // ---- Likes ----

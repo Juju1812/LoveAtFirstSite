@@ -172,7 +172,6 @@ if (eventCount === 0) {
 }
 
 // Migration: add new columns to user_profiles for users who already have rows.
-// SQLite's IF NOT EXISTS doesn't apply to ALTER TABLE; do it defensively.
 const existingCols = db.prepare("PRAGMA table_info(user_profiles)").all().map(c => c.name);
 const newCols = [
   ['gender', 'TEXT'],
@@ -184,7 +183,21 @@ const newCols = [
 for (const [name, type] of newCols) {
   if (!existingCols.includes(name)) {
     try { db.exec(`ALTER TABLE user_profiles ADD COLUMN ${name} ${type}`); }
-    catch (e) { /* ignore — column may already exist */ }
+    catch (e) { /* ignore */ }
+  }
+}
+
+// Migration: add subscription columns to users table
+const userCols = db.prepare("PRAGMA table_info(users)").all().map(c => c.name);
+const newUserCols = [
+  ['stripe_customer_id', 'TEXT'],
+  ['subscription_status', 'TEXT'],
+  ['subscription_current_period_end', 'INTEGER']
+];
+for (const [name, type] of newUserCols) {
+  if (!userCols.includes(name)) {
+    try { db.exec(`ALTER TABLE users ADD COLUMN ${name} ${type}`); }
+    catch (e) { /* ignore */ }
   }
 }
 
@@ -233,6 +246,45 @@ export function getUserByEmail(email) {
 
 export function getUserById(id) {
   return findUserById.get(id) || null;
+}
+
+// ---- Billing / subscription ----
+const setStripeCustomer = db.prepare(
+  'UPDATE users SET stripe_customer_id = ? WHERE id = ?'
+);
+const setSubStatusByCustomer = db.prepare(
+  'UPDATE users SET subscription_status = ?, subscription_current_period_end = ? WHERE stripe_customer_id = ?'
+);
+const findUserByCustomer = db.prepare(
+  'SELECT id, email, stripe_customer_id, subscription_status, subscription_current_period_end FROM users WHERE stripe_customer_id = ?'
+);
+const fullUserById = db.prepare(
+  'SELECT id, email, stripe_customer_id, subscription_status, subscription_current_period_end FROM users WHERE id = ?'
+);
+
+export function setUserStripeCustomer(userId, customerId) {
+  setStripeCustomer.run(customerId, userId);
+}
+export function updateSubscriptionStatus(customerId, status, currentPeriodEnd) {
+  setSubStatusByCustomer.run(status, currentPeriodEnd, customerId);
+}
+export function getUserByStripeCustomer(customerId) {
+  return findUserByCustomer.get(customerId) || null;
+}
+export function getFullUser(userId) {
+  return fullUserById.get(userId) || null;
+}
+
+export function isUserPremium(userId) {
+  const u = fullUserById.get(userId);
+  if (!u || !u.subscription_status) return false;
+  // 'active' or 'trialing' counts. 'past_due' and 'canceled' do not.
+  if (u.subscription_status !== 'active' && u.subscription_status !== 'trialing') return false;
+  // Honor period end if available
+  if (u.subscription_current_period_end && u.subscription_current_period_end < Math.floor(Date.now() / 1000)) {
+    return false;
+  }
+  return true;
 }
 
 // ---- User profiles ----

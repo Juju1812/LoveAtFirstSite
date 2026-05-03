@@ -1,6 +1,9 @@
 import { useState } from 'react';
 import { type CallStats, buildNarrative, summarizeStats } from '../callStats';
 import { ChemistryChart } from './ChemistryChart';
+import { useAuth } from '../AuthContext';
+import { replayLastPass } from '../api';
+import { Link, useNavigate } from 'react-router-dom';
 
 interface Props {
   stats: CallStats;
@@ -13,8 +16,30 @@ interface Props {
 
 export function ResultsScreen({ stats, onGoAgain, onDone, canSave, saved, onSavePeer }: Props) {
   const [expanded, setExpanded] = useState(false);
+  const [replaying, setReplaying] = useState(false);
+  const [replayMsg, setReplayMsg] = useState<string | null>(null);
+  const { user } = useAuth();
+  const navigate = useNavigate();
   const summary = summarizeStats(stats);
   const narrative = buildNarrative(stats);
+
+  const canReplay = stats.outcome === 'you-rejected';
+  async function handleReplay() {
+    setReplaying(true); setReplayMsg(null);
+    try {
+      const result = await replayLastPass();
+      if (result.mutual && result.conversationId) {
+        setReplayMsg("It's a mutual match — opening conversation…");
+        setTimeout(() => navigate(`/messages/${result.conversationId}`), 1200);
+      } else {
+        setReplayMsg('Like sent. If they liked you back, you\'ll see them in your Likes tab.');
+      }
+    } catch (err: any) {
+      setReplayMsg(err.message ?? 'Replay failed');
+    } finally {
+      setReplaying(false);
+    }
+  }
 
   const headline = (() => {
     if (stats.outcome === 'matched') return "It was a match";
@@ -95,6 +120,27 @@ export function ResultsScreen({ stats, onGoAgain, onDone, canSave, saved, onSave
             </button>
           </div>
         )}
+
+        {canReplay && (
+          user?.premium ? (
+            <div className="results-replay-row">
+              <div className="results-save-text">
+                <strong>↩️ Replay this pass</strong> — undo your ✕ and convert it to a like.
+              </div>
+              <button className="results-replay-btn" onClick={handleReplay} disabled={replaying}>
+                {replaying ? '…' : 'Replay'}
+              </button>
+            </div>
+          ) : (
+            <Link to="/upgrade" className="results-upsell-row">
+              <div className="results-save-text">
+                <strong>↩️ Want to undo that?</strong> Glimpse+ lets you replay your last pass within 24h.
+              </div>
+              <span className="results-upsell-cta">Get Glimpse+ →</span>
+            </Link>
+          )
+        )}
+        {replayMsg && <div className="settings-note">{replayMsg}</div>}
 
         <div className="results-actions">
           <button className="results-go-again" onClick={onGoAgain}>
