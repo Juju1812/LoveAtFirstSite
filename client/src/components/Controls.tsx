@@ -1,22 +1,36 @@
 interface Props {
-  passUnlocked: boolean;       // true once Pass becomes "Pass" (after timer ends)
-  likeUnlocked: boolean;       // true once Like becomes clickable (30s in)
-  likeUnlockInSeconds: number; // countdown until Like unlocks (0 = unlocked)
+  passUnlocked: boolean;
+  likeUnlocked: boolean;
+  likeUnlockInSeconds: number;
   swiped: 'left' | 'right' | null;
   peerLikedYou: boolean;
+  audioEnabled: boolean;
+  videoEnabled: boolean;
   onPass: () => void;
   onLike: () => void;
+  onToggleAudio: () => void;
+  onToggleVideo: () => void;
 }
 
 export function Controls({
   passUnlocked, likeUnlocked, likeUnlockInSeconds,
   swiped, peerLikedYou,
-  onPass, onLike
+  audioEnabled, videoEnabled,
+  onPass, onLike, onToggleAudio, onToggleVideo
 }: Props) {
   const passDisabled = !!swiped;
   const likeDisabled = !likeUnlocked || !!swiped;
   return (
     <div className="controls">
+      <button
+        className={`ctrl-toggle ${audioEnabled ? '' : 'ctrl-toggle-off'}`}
+        onClick={onToggleAudio}
+        title={audioEnabled ? 'Mute mic' : 'Unmute mic'}
+        aria-label={audioEnabled ? 'Mute microphone' : 'Unmute microphone'}
+      >
+        {audioEnabled ? '🎤' : '🔇'}
+      </button>
+
       <button
         className="ctrl ctrl-pass"
         onClick={onPass}
@@ -35,7 +49,7 @@ export function Controls({
         aria-label="Like this person"
         title={likeUnlocked
           ? 'Like — both right = match'
-          : `Like unlocks in ${likeUnlockInSeconds}s — give it a moment`}
+          : `Like unlocks in ${likeUnlockInSeconds}s`}
       >
         {likeUnlocked ? (
           <>
@@ -48,6 +62,15 @@ export function Controls({
             <span className="ctrl-label">{likeUnlockInSeconds}s</span>
           </>
         )}
+      </button>
+
+      <button
+        className={`ctrl-toggle ${videoEnabled ? '' : 'ctrl-toggle-off'}`}
+        onClick={onToggleVideo}
+        title={videoEnabled ? 'Turn camera off' : 'Turn camera on'}
+        aria-label={videoEnabled ? 'Turn camera off' : 'Turn camera on'}
+      >
+        {videoEnabled ? '📷' : '📵'}
       </button>
 
       {peerLikedYou && likeUnlocked && !swiped && (

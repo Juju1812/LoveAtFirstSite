@@ -20,6 +20,7 @@ import { Dashboard } from './components/Dashboard';
 import { Settings } from './components/Settings';
 import { SavedList } from './components/SavedList';
 import { AICoach } from './components/AICoach';
+import { Reactions } from './components/Reactions';
 import { type Profile, sanitizeIncomingProfile, isFirstVisit, markVisited } from './profile';
 import { useAuth } from './AuthContext';
 import { saveConnection, getToken, moderateText } from './api';
@@ -166,6 +167,8 @@ function Match() {
   const [peerUserId, setPeerUserId] = useState<number | null>(null);
   const [recentTranscripts, setRecentTranscripts] = useState<string[]>([]);
   const [savedPeer, setSavedPeer] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
+  const incomingReactionRef = useRef<((emoji: string) => void) | null>(null);
   const [stats, setStats] = useState<CallStats | null>(null);
   const [resultsStats, setResultsStats] = useState<CallStats | null>(null);
   const [localVideoEl, setLocalVideoEl] = useState<HTMLVideoElement | null>(null);
@@ -333,13 +336,23 @@ function Match() {
     setPeerProfile(sanitized);
   }, []);
 
-  const { localStream, remoteStream, connectionState, sendChat, sendProfile, startMedia, stopAll } = useWebRTC({
+  const onReactionReceived = useCallback((emoji: string) => {
+    incomingReactionRef.current?.(emoji);
+  }, []);
+
+  const {
+    localStream, remoteStream, connectionState,
+    sendChat, sendProfile, sendReaction,
+    toggleAudio, toggleVideo, audioEnabled, videoEnabled,
+    startMedia, stopAll
+  } = useWebRTC({
     socket: socketRef.current,
     sessionId: session?.sessionId ?? null,
     role: session?.role ?? null,
     signalUrl: SIGNAL_URL,
     onChatMessage,
-    onProfile: onProfileReceived
+    onProfile: onProfileReceived,
+    onReaction: onReactionReceived
   });
 
   // Live speech-to-text on local mic — drives the chemistry meter from actual
@@ -652,24 +665,24 @@ function Match() {
     );
   }
 
+  const unreadCount = 0; // chat is currently always-visible; could add later
+
   return (
-    <div className="app">
-      <header className="topbar">
+    <div className="app app-immersive">
+      <VideoStage
+        localStream={localStream}
+        remoteStream={remoteStream}
+        connecting={phase === 'connecting' || phase === 'queued'}
+        audioEnabled={audioEnabled}
+        videoEnabled={videoEnabled}
+        onLocalVideoEl={setLocalVideoEl}
+      />
+
+      <header className="topbar topbar-floating">
         <button className="topbar-back" onClick={leaveMatch} title="End call and go back to homepage">
           <span className="topbar-back-arrow">←</span>
           <span className="topbar-back-label">Back</span>
         </button>
-        <div className="brand-group">
-          <div className="brand">Glimpse</div>
-          {speechSupported && (
-            <span
-              className={`mic-indicator ${listening ? 'mic-on' : ''}`}
-              title={listening ? 'Listening — chemistry reads your conversation' : 'Mic recognition idle'}
-            >
-              🎤
-            </span>
-          )}
-        </div>
         <ChemistryMeter score={chemistry} />
         <Timer secondsLeft={secondsLeft} />
         <button className="topbar-report" onClick={report} title="Report this user">
@@ -677,29 +690,44 @@ function Match() {
         </button>
       </header>
 
-      <main className="main">
-        <VideoStage
-          localStream={localStream}
-          remoteStream={remoteStream}
-          connecting={phase === 'connecting' || phase === 'queued'}
-          onLocalVideoEl={setLocalVideoEl}
-        />
-        <ChatPanel
-          lines={chatLines}
-          onSend={sendChatMessage}
-          disabled={phase !== 'live' && phase !== 'matched'}
-        />
-      </main>
+      <button
+        className={`chat-toggle ${chatOpen ? 'is-active' : ''}`}
+        onClick={() => setChatOpen(o => !o)}
+        title={chatOpen ? 'Close chat' : 'Open chat'}
+      >
+        💬
+        {!chatOpen && chatLines.length > 0 && (
+          <span className="chat-toggle-count">{chatLines.length}</span>
+        )}
+      </button>
 
-      <footer className="footer">
+      <ChatPanel
+        lines={chatLines}
+        onSend={sendChatMessage}
+        disabled={phase !== 'live' && phase !== 'matched'}
+        open={chatOpen}
+        onClose={() => setChatOpen(false)}
+      />
+
+      <Reactions
+        onSend={(emoji) => sendReaction(emoji)}
+        registerIncoming={(handler) => { incomingReactionRef.current = handler; }}
+        disabled={phase !== 'live' && phase !== 'matched'}
+      />
+
+      <footer className="footer footer-floating">
         <Controls
           passUnlocked={passUnlocked}
           likeUnlocked={likeUnlocked}
           likeUnlockInSeconds={likeUnlockInSeconds}
           swiped={swiped}
           peerLikedYou={peerLikedYou}
+          audioEnabled={audioEnabled}
+          videoEnabled={videoEnabled}
           onPass={handlePass}
           onLike={handleLike}
+          onToggleAudio={toggleAudio}
+          onToggleVideo={toggleVideo}
         />
       </footer>
 

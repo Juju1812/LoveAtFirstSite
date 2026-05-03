@@ -10,9 +10,11 @@ interface Props {
   lines: ChatLine[];
   onSend: (text: string) => void;
   disabled?: boolean;
+  open: boolean;
+  onClose: () => void;
 }
 
-export function ChatPanel({ lines, onSend, disabled }: Props) {
+export function ChatPanel({ lines, onSend, disabled, open, onClose }: Props) {
   const [text, setText] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -20,7 +22,7 @@ export function ChatPanel({ lines, onSend, disabled }: Props) {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [lines]);
+  }, [lines, open]);
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -31,10 +33,14 @@ export function ChatPanel({ lines, onSend, disabled }: Props) {
   }
 
   return (
-    <div className="chat-panel">
+    <div className={`chat-drawer ${open ? 'is-open' : ''}`} aria-hidden={!open}>
+      <div className="chat-drawer-header">
+        <span>💬 Chat</span>
+        <button className="chat-drawer-close" onClick={onClose} aria-label="Close chat">✕</button>
+      </div>
       <div className="chat-scroll" ref={scrollRef}>
         {lines.length === 0 && (
-          <div className="chat-empty">Say hi — type to build chemistry 💬</div>
+          <div className="chat-empty">Say hi — chemistry reads what you type too 💬</div>
         )}
         {lines.map((l, i) => (
           <div key={i} className={`chat-line chat-${l.from}`}>

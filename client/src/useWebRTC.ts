@@ -36,6 +36,7 @@ export interface UseWebRTCOpts {
   signalUrl: string;
   onChatMessage: (msg: string) => void;
   onProfile: (profile: unknown) => void;
+  onReaction?: (emoji: string) => void;
 }
 
 export interface UseWebRTC {
@@ -44,12 +45,17 @@ export interface UseWebRTC {
   connectionState: RTCPeerConnectionState | 'idle';
   sendChat: (msg: string) => void;
   sendProfile: (profile: unknown) => void;
+  sendReaction: (emoji: string) => void;
+  toggleAudio: () => boolean; // returns new "audio enabled" state
+  toggleVideo: () => boolean;
+  audioEnabled: boolean;
+  videoEnabled: boolean;
   startMedia: () => Promise<MediaStream>;
   stopAll: () => void;
 }
 
 export function useWebRTC(opts: UseWebRTCOpts): UseWebRTC {
-  const { socket, sessionId, role, signalUrl, onChatMessage, onProfile } = opts;
+  const { socket, sessionId, role, signalUrl, onChatMessage, onProfile, onReaction } = opts;
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const dcRef = useRef<RTCDataChannel | null>(null);
@@ -64,8 +70,13 @@ export function useWebRTC(opts: UseWebRTCOpts): UseWebRTC {
 
   const onChatMessageRef = useRef(onChatMessage);
   const onProfileRef = useRef(onProfile);
+  const onReactionRef = useRef(onReaction);
   useEffect(() => { onChatMessageRef.current = onChatMessage; }, [onChatMessage]);
   useEffect(() => { onProfileRef.current = onProfile; }, [onProfile]);
+  useEffect(() => { onReactionRef.current = onReaction; }, [onReaction]);
+
+  const [audioEnabled, setAudioEnabled] = useState(true);
+  const [videoEnabled, setVideoEnabled] = useState(true);
 
   const startMedia = useCallback(async () => {
     if (localStreamRef.current) return localStreamRef.current;
@@ -87,6 +98,8 @@ export function useWebRTC(opts: UseWebRTCOpts): UseWebRTC {
           onChatMessageRef.current(parsed.text);
         } else if (parsed.type === 'profile') {
           onProfileRef.current(parsed.profile);
+        } else if (parsed.type === 'reaction' && typeof parsed.emoji === 'string') {
+          onReactionRef.current?.(parsed.emoji);
         }
       } catch {
         // ignore
@@ -134,6 +147,30 @@ export function useWebRTC(opts: UseWebRTCOpts): UseWebRTC {
     try { dc.send(JSON.stringify({ type: 'profile', profile })); }
     catch (err) { console.warn('sendProfile failed', err); }
   }, []);
+
+  const sendReaction = useCallback((emoji: string) => {
+    const dc = dcRef.current;
+    if (!dc || dc.readyState !== 'open') return;
+    try { dc.send(JSON.stringify({ type: 'reaction', emoji })); } catch { /* noop */ }
+  }, []);
+
+  const toggleAudio = useCallback(() => {
+    const stream = localStreamRef.current;
+    if (!stream) return audioEnabled;
+    const next = !audioEnabled;
+    for (const t of stream.getAudioTracks()) t.enabled = next;
+    setAudioEnabled(next);
+    return next;
+  }, [audioEnabled]);
+
+  const toggleVideo = useCallback(() => {
+    const stream = localStreamRef.current;
+    if (!stream) return videoEnabled;
+    const next = !videoEnabled;
+    for (const t of stream.getVideoTracks()) t.enabled = next;
+    setVideoEnabled(next);
+    return next;
+  }, [videoEnabled]);
 
   // Build / tear down the peer connection whenever a session begins or ends.
   useEffect(() => {
@@ -234,5 +271,10 @@ export function useWebRTC(opts: UseWebRTCOpts): UseWebRTC {
     };
   }, [socket, sessionId, role, signalUrl, startMedia, wireDataChannel, teardownPeer]);
 
-  return { localStream, remoteStream, connectionState, sendChat, sendProfile, startMedia, stopAll };
+  return {
+    localStream, remoteStream, connectionState,
+    sendChat, sendProfile, sendReaction,
+    toggleAudio, toggleVideo, audioEnabled, videoEnabled,
+    startMedia, stopAll
+  };
 }
