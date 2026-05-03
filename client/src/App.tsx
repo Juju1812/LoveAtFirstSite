@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { useWebRTC } from './useWebRTC';
+import { useSpeech } from './useSpeech';
 import { nextChemistry, scoreText } from './sentiment';
 import { VideoStage } from './components/VideoStage';
 import { ChemistryMeter } from './components/ChemistryMeter';
@@ -141,6 +142,26 @@ export function App() {
     onChatMessage
   });
 
+  // Live speech-to-text on local mic — drives the chemistry meter from actual
+  // spoken conversation, not just typed messages. Transcripts stay client-side;
+  // only the numeric score is broadcast.
+  const onSpokenTranscript = useCallback((text: string) => {
+    const s = scoreText(text);
+    if (s === 0) return; // skip neutral chunks to reduce noise
+    const next = nextChemistry(chemistryRef.current, s);
+    chemistryRef.current = next;
+    setChemistry(next);
+    socketRef.current?.emit('chemistry-update', {
+      sessionId: session?.sessionId,
+      score: next
+    });
+  }, [session?.sessionId]);
+
+  const { supported: speechSupported, listening } = useSpeech({
+    active: phase === 'live' || phase === 'matched',
+    onTranscript: onSpokenTranscript
+  });
+
   // Once WebRTC is connected, transition to "live".
   useEffect(() => {
     if (phase === 'connecting' && connectionState === 'connected') {
@@ -249,7 +270,17 @@ export function App() {
   return (
     <div className="app">
       <header className="topbar">
-        <div className="brand">Glimpse</div>
+        <div className="brand-group">
+          <div className="brand">Glimpse</div>
+          {speechSupported && (
+            <span
+              className={`mic-indicator ${listening ? 'mic-on' : ''}`}
+              title={listening ? 'Listening — chemistry reads your conversation' : 'Mic recognition idle'}
+            >
+              🎤
+            </span>
+          )}
+        </div>
         <ChemistryMeter score={chemistry} />
         <Timer secondsLeft={secondsLeft} />
       </header>

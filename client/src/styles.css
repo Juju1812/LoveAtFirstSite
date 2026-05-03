@@ -634,6 +634,22 @@ input {
   -webkit-text-fill-color: transparent;
   letter-spacing: -0.3px;
 }
+.brand-group { display: flex; align-items: center; gap: 8px; }
+.mic-indicator {
+  font-size: 13px;
+  opacity: 0.35;
+  transition: opacity 200ms ease, transform 200ms ease;
+  filter: grayscale(1);
+}
+.mic-indicator.mic-on {
+  opacity: 1;
+  filter: grayscale(0);
+  animation: mic-pulse 1.6s ease-in-out infinite;
+}
+@keyframes mic-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.18); }
+}
 
 .main {
   display: grid;
