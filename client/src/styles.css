@@ -949,7 +949,15 @@ input {
 .ctrl-like:hover:not(:disabled) { box-shadow: 0 12px 30px rgba(255,46,99,0.55); }
 .ctrl-like .ctrl-icon { font-size: 24px; }
 .ctrl-like .ctrl-label { color: rgba(255,255,255,0.95); }
-.ctrl-like:disabled { box-shadow: none; }
+/* Locked state — clearly disabled but recognisable */
+.ctrl-like:disabled {
+  background: rgba(255,255,255,0.05);
+  border-color: rgba(255,255,255,0.1);
+  box-shadow: none;
+  opacity: 0.7;
+}
+.ctrl-like:disabled .ctrl-icon { font-size: 18px; opacity: 0.7; }
+.ctrl-like:disabled .ctrl-label { color: var(--gray); font-weight: 700; }
 
 @media (max-width: 480px) {
   .ctrl { width: 76px; height: 60px; }

@@ -2,43 +2,38 @@ interface Props {
   unlocked: boolean;
   swiped: 'left' | 'right' | null;
   peerLikedYou: boolean;
-  onSwipeLeft: () => void;
-  onSwipeRight: () => void;
-  onNext: () => void;
+  onPass: () => void;
+  onLike: () => void;
 }
 
 export function Controls({
   unlocked, swiped, peerLikedYou,
-  onSwipeLeft, onSwipeRight, onNext
+  onPass, onLike
 }: Props) {
-  const swipeDisabled = !unlocked || !!swiped;
+  const passDisabled = !!swiped;
+  const likeDisabled = !unlocked || !!swiped;
   return (
     <div className="controls">
       <button
         className="ctrl ctrl-pass"
-        onClick={onSwipeLeft}
-        disabled={swipeDisabled}
+        onClick={onPass}
+        disabled={passDisabled}
         aria-label="Pass on this person"
-        title={unlocked ? 'Pass — find someone new' : 'Locked until timer ends'}
+        title={unlocked ? 'Pass — find someone new' : 'Skip — find someone else now'}
       >
         <span className="ctrl-icon">✕</span>
-        <span className="ctrl-label">Pass</span>
-      </button>
-
-      <button className="ctrl ctrl-next" onClick={onNext} title="Skip to next person">
-        <span className="ctrl-icon">⏭</span>
-        <span className="ctrl-label">Next</span>
+        <span className="ctrl-label">{unlocked ? 'Pass' : 'Skip'}</span>
       </button>
 
       <button
         className="ctrl ctrl-like"
-        onClick={onSwipeRight}
-        disabled={swipeDisabled}
+        onClick={onLike}
+        disabled={likeDisabled}
         aria-label="Like this person"
-        title={unlocked ? 'Like — both right = match' : 'Locked until timer ends'}
+        title={unlocked ? 'Like — both right = match' : "Like unlocks once you've spent 2 minutes together"}
       >
-        <span className="ctrl-icon">♥</span>
-        <span className="ctrl-label">Like</span>
+        <span className="ctrl-icon">{unlocked ? '♥' : '🔒'}</span>
+        <span className="ctrl-label">{unlocked ? 'Like' : 'Locked'}</span>
       </button>
 
       {peerLikedYou && unlocked && !swiped && (

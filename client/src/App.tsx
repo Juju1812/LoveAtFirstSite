@@ -469,24 +469,34 @@ function Match() {
     applyChemistryDelta(nextChemistry(chemistryRef.current, s));
   }, [sendChat, applyChemistryDelta]);
 
-  const swipeLeft = useCallback(() => {
-    if (!session) return;
-    setSwiped('left');
-    setStats(prev => prev ? { ...prev, outcome: 'you-rejected' } : prev);
-    socketRef.current?.emit('swipe', { sessionId: session.sessionId, direction: 'left' });
-  }, [session]);
+  // Timer math (computed early so callbacks can reference `unlocked`).
+  const secondsLeft = useMemo(() => {
+    if (!session || phase !== 'live') return session?.timerSeconds ?? 120;
+    const elapsed = (now - session.startedAt) / 1000;
+    return Math.max(0, Math.ceil(session.timerSeconds - elapsed));
+  }, [session, now, phase]);
 
-  const swipeRight = useCallback(() => {
+  const unlocked = phase === 'live' && secondsLeft <= 0;
+
+  const handlePass = useCallback(() => {
     if (!session) return;
+    if (unlocked) {
+      // Real swipe-left after the timer — counts as "you-rejected"
+      setSwiped('left');
+      setStats(prev => prev ? { ...prev, outcome: 'you-rejected' } : prev);
+      socketRef.current?.emit('swipe', { sessionId: session.sessionId, direction: 'left' });
+    } else {
+      // Skip before timer — counts as "next"
+      setStats(prev => prev ? { ...prev, outcome: 'next' } : prev);
+      socketRef.current?.emit('next', { sessionId: session.sessionId });
+    }
+  }, [session, unlocked]);
+
+  const handleLike = useCallback(() => {
+    if (!session || !unlocked) return;
     setSwiped('right');
     socketRef.current?.emit('swipe', { sessionId: session.sessionId, direction: 'right' });
-  }, [session]);
-
-  const next = useCallback(() => {
-    if (!session) return;
-    setStats(prev => prev ? { ...prev, outcome: 'next' } : prev);
-    socketRef.current?.emit('next', { sessionId: session.sessionId });
-  }, [session]);
+  }, [session, unlocked]);
 
   const report = useCallback(() => {
     if (!session) return;
@@ -556,15 +566,6 @@ function Match() {
     stopAll();
     navigate('/');
   }, [stopAll, navigate]);
-
-  // ---- Timer math ----
-  const secondsLeft = useMemo(() => {
-    if (!session || phase !== 'live') return session?.timerSeconds ?? 120;
-    const elapsed = (now - session.startedAt) / 1000;
-    return Math.max(0, Math.ceil(session.timerSeconds - elapsed));
-  }, [session, now, phase]);
-
-  const unlocked = phase === 'live' && secondsLeft <= 0;
 
   // ---- Render ----
   if (phase === 'ended' && resultsStats) {
@@ -650,9 +651,8 @@ function Match() {
           unlocked={unlocked}
           swiped={swiped}
           peerLikedYou={peerLikedYou}
-          onSwipeLeft={swipeLeft}
-          onSwipeRight={swipeRight}
-          onNext={next}
+          onPass={handlePass}
+          onLike={handleLike}
         />
       </footer>
 
