@@ -1,12 +1,17 @@
 import { useEffect, useState } from 'react';
-
-const PALETTE = ['❤️', '😂', '🔥', '👀', '🥰', '🤯'];
+import { DEFAULT_REACTION_PALETTE, isCustomReaction } from '../profile';
 
 interface Props {
   onSend: (emoji: string) => void;
   /** Trigger an incoming-reaction animation (called when peer sends one) */
   registerIncoming?: (handler: (emoji: string) => void) => void;
   disabled?: boolean;
+  /** User-picked palette of unicode emojis. Falls back to default. */
+  palette?: string[];
+  /** Pro-only: extra image-based reactions (data URLs). */
+  customReactions?: string[];
+  /** When provided, a "+ Create" button is shown. Pro users only. */
+  onOpenCreator?: () => void;
 }
 
 interface Floater {
@@ -18,9 +23,12 @@ interface Floater {
   size: number;
 }
 
-export function Reactions({ onSend, registerIncoming, disabled }: Props) {
+export function Reactions({ onSend, registerIncoming, disabled, palette, customReactions, onOpenCreator }: Props) {
   const [floaters, setFloaters] = useState<Floater[]>([]);
   const [open, setOpen] = useState(false);
+
+  const stack = (palette && palette.length > 0) ? palette : DEFAULT_REACTION_PALETTE;
+  const customs = customReactions ?? [];
 
   // Hook: parent calls registerIncoming(handler) once. Handler drops a floater.
   useEffect(() => {
@@ -63,7 +71,9 @@ export function Reactions({ onSend, registerIncoming, disabled }: Props) {
               ['--drift' as any]: `${f.drift}px`
             }}
           >
-            {f.emoji}
+            {isCustomReaction(f.emoji)
+              ? <img src={f.emoji} alt="" style={{ width: f.size, height: f.size, objectFit: 'contain' }} draggable={false} />
+              : f.emoji}
           </span>
         ))}
       </div>
@@ -71,7 +81,7 @@ export function Reactions({ onSend, registerIncoming, disabled }: Props) {
       <div className={`reactions-tray ${open ? 'open' : ''}`}>
         {open && (
           <div className="reactions-palette">
-            {PALETTE.map(em => (
+            {stack.map(em => (
               <button
                 key={em}
                 type="button"
@@ -82,6 +92,28 @@ export function Reactions({ onSend, registerIncoming, disabled }: Props) {
                 {em}
               </button>
             ))}
+            {customs.map(url => (
+              <button
+                key={url}
+                type="button"
+                className="reaction-emoji reaction-emoji-custom"
+                onClick={() => handlePick(url)}
+                disabled={disabled}
+                title="Custom reaction"
+              >
+                <img src={url} alt="custom" draggable={false} />
+              </button>
+            ))}
+            {onOpenCreator && (
+              <button
+                type="button"
+                className="reaction-emoji reaction-emoji-add"
+                onClick={() => { onOpenCreator(); setOpen(false); }}
+                title="Create a custom reaction"
+              >
+                ＋
+              </button>
+            )}
           </div>
         )}
         <button

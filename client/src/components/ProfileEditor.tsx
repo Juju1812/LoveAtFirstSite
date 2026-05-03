@@ -1,5 +1,7 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { type Profile, resizePhoto, clearProfile, getProfilePhotos, MAX_PHOTOS } from '../profile';
+import { useAuth } from '../AuthContext';
 
 interface Props {
   initial: Profile | null;
@@ -7,7 +9,11 @@ interface Props {
   onCancel: () => void;
 }
 
+const FREE_PHOTO_CAP = 3;
+
 export function ProfileEditor({ initial, onSave, onCancel }: Props) {
+  const { user } = useAuth();
+  const photoCap = user?.premium ? MAX_PHOTOS : FREE_PHOTO_CAP;
   const [name, setName] = useState(initial?.name ?? '');
   const [age, setAge] = useState(initial?.age ? String(initial.age) : '');
   const [bio, setBio] = useState(initial?.bio ?? '');
@@ -84,7 +90,7 @@ export function ProfileEditor({ initial, onSave, onCancel }: Props) {
   // Build the slot grid: filled slots + one "+" empty slot if there's room
   const slots: Array<{ kind: 'photo'; src: string; idx: number } | { kind: 'add' }> = [
     ...photos.map((src, idx) => ({ kind: 'photo' as const, src, idx })),
-    ...(photos.length < MAX_PHOTOS ? [{ kind: 'add' as const }] : [])
+    ...(photos.length < photoCap ? [{ kind: 'add' as const }] : [])
   ];
 
   return (
@@ -100,7 +106,10 @@ export function ProfileEditor({ initial, onSave, onCancel }: Props) {
         <form className="profile-form" onSubmit={handleSubmit}>
           <div className="photo-grid-section">
             <label className="photo-grid-label">
-              Photos <span className="photo-grid-count">{photos.length}/{MAX_PHOTOS}</span>
+              Photos <span className="photo-grid-count">{photos.length}/{photoCap}</span>
+              {!user?.premium && (
+                <Link to="/upgrade" className="photo-grid-upsell">✨ Glimpse+ for {MAX_PHOTOS}</Link>
+              )}
             </label>
             <div className="photo-grid">
               {slots.map((slot, i) => {

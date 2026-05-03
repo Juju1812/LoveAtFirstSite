@@ -168,6 +168,27 @@ export async function replayLastPass(): Promise<{ ok: boolean; peerUserId: numbe
   return apiFetch('/api/billing/replay', { method: 'POST' });
 }
 
+// ---- Verification ----
+export async function requestVerification(): Promise<{ ok: true }> {
+  return apiFetch('/api/profile/verify', { method: 'POST' });
+}
+
+// ---- Push notifications ----
+export async function getPushPublicKey(): Promise<{ publicKey: string | null }> {
+  return apiFetch('/api/push/public-key');
+}
+export async function registerPushSubscription(sub: PushSubscriptionJSON): Promise<{ ok: true }> {
+  return apiFetch('/api/push/subscribe', { method: 'POST', body: JSON.stringify(sub) });
+}
+export async function unregisterPushSubscription(endpoint: string): Promise<{ ok: true }> {
+  return apiFetch('/api/push/unsubscribe', { method: 'POST', body: JSON.stringify({ endpoint }) });
+}
+
+// ---- Daily call quota (free tier limit) ----
+export async function getCallQuota(): Promise<{ used: number; limit: number | null; remaining: number | null }> {
+  return apiFetch('/api/quota');
+}
+
 // ---- Likes ----
 export interface LikeEntry {
   user_id: number;
@@ -181,9 +202,15 @@ export interface LikeEntry {
   age: number | null;
   i_liked_them?: number;
   they_liked_me?: number;
+  /** When true, this entry is a redacted free-tier teaser. */
+  redacted?: boolean;
 }
 export interface LikesResponse {
   received_only: LikeEntry[];
+  /** Total count of likes received (may exceed entries when redacted). */
+  received_count?: number;
+  /** True when received_only entries are redacted for non-premium users. */
+  redacted?: boolean;
   mutual: LikeEntry[];
   given_only: LikeEntry[];
 }

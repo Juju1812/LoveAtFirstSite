@@ -20,8 +20,12 @@ import { Dashboard } from './components/Dashboard';
 import { Settings } from './components/Settings';
 import { SavedList } from './components/SavedList';
 import { AICoach } from './components/AICoach';
+import { Icebreaker } from './components/Icebreaker';
+import { ConnectionIndicator } from './components/ConnectionIndicator';
+import { CaptionsOverlay } from './components/CaptionsOverlay';
 import { Reactions } from './components/Reactions';
-import { type Profile, sanitizeIncomingProfile, isFirstVisit, markVisited } from './profile';
+import { CustomReactionCreator } from './components/CustomReactionCreator';
+import { type Profile, sanitizeIncomingProfile, isFirstVisit, markVisited, getReactionPalette, getCustomReactions } from './profile';
 import { useAuth } from './AuthContext';
 import { saveConnection, getToken, moderateText } from './api';
 import { Inbox, Conversation } from './components/Messaging';
@@ -141,7 +145,7 @@ function AboutPage() {
 function Match() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { user, profile: authProfile } = useAuth();
+  const { user, profile: authProfile, setProfile } = useAuth();
 
   // Topic comes from query string ?topic=...
   const topic = useMemo(() => {
@@ -168,6 +172,9 @@ function Match() {
   const [recentTranscripts, setRecentTranscripts] = useState<string[]>([]);
   const [savedPeer, setSavedPeer] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
+  const [reactionCreatorOpen, setReactionCreatorOpen] = useState(false);
+  const [captionsEnabled, setCaptionsEnabled] = useState(false);
+  const [incomingCaption, setIncomingCaption] = useState<{ text: string; at: number } | null>(null);
   const incomingReactionRef = useRef<((emoji: string) => void) | null>(null);
   const [stats, setStats] = useState<CallStats | null>(null);
   const [resultsStats, setResultsStats] = useState<CallStats | null>(null);
@@ -194,6 +201,12 @@ function Match() {
     socketRef.current = socket;
 
     socket.on('queued', () => setPhase('queued'));
+
+    socket.on('quota-exceeded', ({ limit }: { used: number; limit: number }) => {
+      setPhase('idle');
+      setToast(`Daily call limit reached (${limit}/day on free). Upgrade for unlimited.`);
+      navigate('/upgrade');
+    });
 
     socket.on('paired', (info: { sessionId: string; role: Role; timerSeconds: number; peerUserId?: number | null }) => {
       setSession({ sessionId: info.sessionId, role: info.role, timerSeconds: info.timerSeconds, startedAt: Date.now() });
@@ -337,12 +350,20 @@ function Match() {
   }, []);
 
   const onReactionReceived = useCallback((emoji: string) => {
+    if (typeof emoji !== 'string' || emoji.length === 0) return;
+    // Allow short unicode emoji or small image data URLs only (cap 80KB).
+    if (emoji.startsWith('data:image/')) {
+      if (emoji.length > 80_000) return;
+    } else if (emoji.length > 32) {
+      return; // unicode reactions are tiny — anything longer is suspect
+    }
     incomingReactionRef.current?.(emoji);
   }, []);
 
   const {
     localStream, remoteStream, connectionState,
-    sendChat, sendProfile, sendReaction,
+    sendChat, sendProfile, sendReaction, sendData,
+    quality, rttMs,
     toggleAudio, toggleVideo, audioEnabled, videoEnabled,
     startMedia, stopAll
   } = useWebRTC({
@@ -352,19 +373,30 @@ function Match() {
     signalUrl: SIGNAL_URL,
     onChatMessage,
     onProfile: onProfileReceived,
-    onReaction: onReactionReceived
+    onReaction: onReactionReceived,
+    onData: (payload: any) => {
+      if (payload?.type === 'caption' && typeof payload.text === 'string') {
+        setIncomingCaption({ text: payload.text.slice(0, 240), at: Date.now() });
+      }
+    }
   });
 
   // Live speech-to-text on local mic — drives the chemistry meter from actual
-  // spoken conversation, not just typed messages. Transcripts stay client-side;
-  // only the numeric score is broadcast.
+  // spoken conversation, not just typed messages. Transcripts normally stay
+  // client-side; we only forward them to the peer when *they* have captions on
+  // (we send unconditionally; their UI decides whether to render).
+  const captionsEnabledRef = useRef(captionsEnabled);
+  useEffect(() => { captionsEnabledRef.current = captionsEnabled; }, [captionsEnabled]);
   const onSpokenTranscript = useCallback((text: string) => {
     setStats(prev => prev ? { ...prev, spokenChunks: prev.spokenChunks + 1 } : prev);
     setRecentTranscripts(prev => [...prev, text].slice(-15));
+    // Always send caption so the peer can choose to display it. Caption text is
+    // small so it's fine to send without coordinating capability flags.
+    sendData({ type: 'caption', text });
     const s = scoreText(text);
     if (s === 0) return; // skip neutral chunks to reduce noise
     applyChemistryDelta(nextChemistry(chemistryRef.current, s));
-  }, [applyChemistryDelta]);
+  }, [applyChemistryDelta, sendData]);
 
   const { supported: speechSupported, listening } = useSpeech({
     active: phase === 'live' || phase === 'matched',
@@ -372,7 +404,9 @@ function Match() {
   });
 
   // Face analysis — runs locally on your own video. Updates stats every frame
-  // and nudges the chemistry meter at 1Hz from accumulated face signal.
+  // and nudges the chemistry meter from a smoothed multi-second window.
+  // We average over ~3s (not 1s) and require a meaningful signal to avoid
+  // making the bar twitch on every blink/expression flicker.
   const lastFaceTickRef = useRef(0);
   const faceWindowRef = useRef<FaceFrame[]>([]);
   const onFaceFrame = useCallback((f: FaceFrame) => {
@@ -391,27 +425,30 @@ function Match() {
 
     if (f.hasFace) faceWindowRef.current.push(f);
 
-    // Once per second, average the recent window into a chemistry signal.
+    // Average a wider window (~3s, ~18 samples at 6fps) into one chemistry
+    // signal. This keeps the meter responsive to *sustained* expressions
+    // rather than every single blink.
     const now = Date.now();
-    if (now - lastFaceTickRef.current < 1000) return;
+    if (now - lastFaceTickRef.current < 3000) return;
     lastFaceTickRef.current = now;
     const w = faceWindowRef.current;
-    if (w.length === 0) return;
+    if (w.length < 6) return; // not enough sustained data — skip
     const avgSmile = w.reduce((a, x) => a + x.smile, 0) / w.length;
     const avgAttention = w.reduce((a, x) => a + x.attention, 0) / w.length;
     const avgSurprise = w.reduce((a, x) => a + x.surprise, 0) / w.length;
     faceWindowRef.current = [];
 
-    // Build a per-second sentiment-equivalent signal in [-1, 1]
+    // Build a sentiment-equivalent signal in [-1, 1]. Magnitudes are
+    // intentionally modest — face is a supporting signal, not the lead.
     let signal = 0;
-    if (avgSmile > 0.45) signal += 0.55;
-    else if (avgSmile > 0.25) signal += 0.25;
-    if (avgSurprise > 0.4) signal += 0.25; // engaged reaction
-    if (avgAttention > 0.7) signal += 0.15;
-    else if (avgAttention < 0.35) signal -= 0.2;
+    if (avgSmile > 0.45) signal += 0.35;
+    else if (avgSmile > 0.25) signal += 0.15;
+    if (avgSurprise > 0.4) signal += 0.15;
+    if (avgAttention > 0.7) signal += 0.08;
+    else if (avgAttention < 0.35) signal -= 0.12;
     signal = Math.max(-1, Math.min(1, signal));
 
-    if (Math.abs(signal) < 0.1) return; // ignore tiny signals
+    if (Math.abs(signal) < 0.12) return; // ignore weak signals
     applyChemistryDelta(nextChemistry(chemistryRef.current, signal));
   }, [applyChemistryDelta]);
 
@@ -689,6 +726,24 @@ function Match() {
         </button>
         <ChemistryMeter score={chemistry} />
         <Timer secondsLeft={secondsLeft} matched={phase === 'matched'} />
+        <ConnectionIndicator quality={quality} rttMs={rttMs} />
+        {user?.premium ? (
+          <button
+            className={`topbar-cc ${captionsEnabled ? 'is-on' : ''}`}
+            onClick={() => setCaptionsEnabled(v => !v)}
+            title={captionsEnabled ? 'Hide live captions' : 'Show live captions'}
+          >
+            CC
+          </button>
+        ) : (
+          <button
+            className="topbar-cc topbar-cc-locked"
+            onClick={() => navigate('/upgrade')}
+            title="Live captions are a Glimpse+ perk"
+          >
+            CC <span className="topbar-cc-lock">✨</span>
+          </button>
+        )}
         <button className="topbar-report" onClick={report} title="Report this user">
           🚩
         </button>
@@ -717,7 +772,22 @@ function Match() {
         onSend={(emoji) => sendReaction(emoji)}
         registerIncoming={(handler) => { incomingReactionRef.current = handler; }}
         disabled={phase !== 'live' && phase !== 'matched'}
+        palette={getReactionPalette(myProfile)}
+        customReactions={user?.premium ? getCustomReactions(myProfile) : []}
+        onOpenCreator={user?.premium ? () => setReactionCreatorOpen(true) : undefined}
       />
+
+      {reactionCreatorOpen && (
+        <CustomReactionCreator
+          existing={getCustomReactions(myProfile)}
+          onClose={() => setReactionCreatorOpen(false)}
+          onSave={async (next) => {
+            const updated: Profile = { ...(myProfile ?? {}), custom_reactions: next };
+            await setProfile(updated);
+            setReactionCreatorOpen(false);
+          }}
+        />
+      )}
 
       <footer className="footer footer-floating">
         <Controls
@@ -735,8 +805,16 @@ function Match() {
         />
       </footer>
 
+      <Icebreaker
+        topic={topic}
+        elapsedSec={elapsedSec}
+        hidden={phase !== 'live'}
+      />
+
+      <CaptionsOverlay caption={incomingCaption} enabled={captionsEnabled && (phase === 'live' || phase === 'matched')} />
+
       <AICoach
-        active={phase === 'live'}
+        active={phase === 'live' && !!user?.premium}
         topic={topic}
         secondsLeft={secondsLeft}
         recentTranscripts={recentTranscripts}

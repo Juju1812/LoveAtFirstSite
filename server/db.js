@@ -4,8 +4,13 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const dataDir = join(__dirname, 'data');
+// Where to store the SQLite file. In production this MUST point at a persistent
+// volume — Render's default disk is ephemeral and wipes on every redeploy,
+// which silently drops all users/likes/messages. Set GLIMPSE_DATA_DIR to a
+// mounted disk path (e.g. /var/data on Render).
+const dataDir = process.env.GLIMPSE_DATA_DIR || join(__dirname, 'data');
 mkdirSync(dataDir, { recursive: true });
+console.log(`[db] Using data directory: ${dataDir}`);
 
 export const db = new DatabaseSync(join(dataDir, 'loveatfirstsite.db'));
 
@@ -155,6 +160,18 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_likes_liked ON likes(liked_user_id, dismissed);
   CREATE INDEX IF NOT EXISTS idx_likes_liker ON likes(liker_user_id);
+
+  CREATE TABLE IF NOT EXISTS push_subscriptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    endpoint TEXT NOT NULL,
+    p256dh TEXT NOT NULL,
+    auth TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    UNIQUE(user_id, endpoint),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_push_subs_user ON push_subscriptions(user_id);
 `);
 
 // Seed a couple of demo events if the table is empty so the UI has data
@@ -179,7 +196,9 @@ const newCols = [
   ['age_min', 'INTEGER'],
   ['age_max', 'INTEGER'],
   ['verified', 'INTEGER DEFAULT 0'],
-  ['photos', 'TEXT'] // JSON-encoded array of data URLs
+  ['photos', 'TEXT'], // JSON-encoded array of data URLs
+  ['reaction_emojis', 'TEXT'], // JSON-encoded array of emoji strings
+  ['custom_reactions', 'TEXT'] // JSON-encoded array of small data URLs (premium-only)
 ];
 for (const [name, type] of newCols) {
   if (!existingCols.includes(name)) {
@@ -291,9 +310,9 @@ export function isUserPremium(userId) {
 // ---- User profiles ----
 const upsertProfile = db.prepare(`
   INSERT INTO user_profiles
-    (user_id, name, age, bio, vibes, contact, photo, photos, gender, looking_for, age_min, age_max, updated_at)
+    (user_id, name, age, bio, vibes, contact, photo, photos, gender, looking_for, age_min, age_max, reaction_emojis, custom_reactions, updated_at)
   VALUES
-    (@user_id, @name, @age, @bio, @vibes, @contact, @photo, @photos, @gender, @looking_for, @age_min, @age_max, @updated_at)
+    (@user_id, @name, @age, @bio, @vibes, @contact, @photo, @photos, @gender, @looking_for, @age_min, @age_max, @reaction_emojis, @custom_reactions, @updated_at)
   ON CONFLICT(user_id) DO UPDATE SET
     name = excluded.name,
     age = excluded.age,
@@ -306,10 +325,12 @@ const upsertProfile = db.prepare(`
     looking_for = excluded.looking_for,
     age_min = excluded.age_min,
     age_max = excluded.age_max,
+    reaction_emojis = excluded.reaction_emojis,
+    custom_reactions = excluded.custom_reactions,
     updated_at = excluded.updated_at
 `);
 const selectProfile = db.prepare(`
-  SELECT name, age, bio, vibes, contact, photo, photos, gender, looking_for, age_min, age_max, verified, updated_at
+  SELECT name, age, bio, vibes, contact, photo, photos, gender, looking_for, age_min, age_max, reaction_emojis, custom_reactions, verified, updated_at
   FROM user_profiles WHERE user_id = ?
 `);
 
@@ -327,8 +348,25 @@ export function saveUserProfile(userId, p) {
     looking_for: p.looking_for ?? null,
     age_min: p.age_min ?? null,
     age_max: p.age_max ?? null,
+    reaction_emojis: p.reaction_emojis ? JSON.stringify(p.reaction_emojis) : null,
+    custom_reactions: p.custom_reactions ? JSON.stringify(p.custom_reactions) : null,
     updated_at: Date.now()
   });
+}
+
+const setVerified = db.prepare(
+  'UPDATE user_profiles SET verified = 1, updated_at = ? WHERE user_id = ?'
+);
+export function markUserVerified(userId) {
+  // Ensure a row exists first
+  const exists = db.prepare('SELECT 1 FROM user_profiles WHERE user_id = ?').get(userId);
+  if (!exists) {
+    db.prepare(
+      'INSERT INTO user_profiles (user_id, verified, updated_at) VALUES (?, 1, ?)'
+    ).run(userId, Date.now());
+    return;
+  }
+  setVerified.run(Date.now(), userId);
 }
 
 export function getUserProfile(userId) {
@@ -340,7 +378,20 @@ export function getUserProfile(userId) {
     try { photos = JSON.parse(row.photos); } catch { photos = null; }
   }
   if (!photos && row.photo) photos = [row.photo];
-  return { ...row, photos: photos ?? [] };
+  let reaction_emojis = null;
+  if (row.reaction_emojis) {
+    try { reaction_emojis = JSON.parse(row.reaction_emojis); } catch { reaction_emojis = null; }
+  }
+  let custom_reactions = null;
+  if (row.custom_reactions) {
+    try { custom_reactions = JSON.parse(row.custom_reactions); } catch { custom_reactions = null; }
+  }
+  return {
+    ...row,
+    photos: photos ?? [],
+    reaction_emojis: Array.isArray(reaction_emojis) ? reaction_emojis : null,
+    custom_reactions: Array.isArray(custom_reactions) ? custom_reactions : null
+  };
 }
 
 // ---- Saved connections ----
@@ -629,4 +680,52 @@ export function getLikesReceived(userId) {
 
 export function getLikesGiven(userId) {
   return likesGivenBy.all(userId, userId);
+}
+
+// ---- Push subscriptions ----
+const insertPushSub = db.prepare(`
+  INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth, created_at)
+  VALUES (?, ?, ?, ?, ?)
+  ON CONFLICT(user_id, endpoint) DO UPDATE SET
+    p256dh = excluded.p256dh,
+    auth = excluded.auth,
+    created_at = excluded.created_at
+`);
+const deletePushSubByEndpoint = db.prepare(
+  'DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?'
+);
+const deletePushSubByEndpointAny = db.prepare(
+  'DELETE FROM push_subscriptions WHERE endpoint = ?'
+);
+const selectPushSubsForUser = db.prepare(
+  'SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ?'
+);
+
+export function savePushSubscription(userId, sub) {
+  insertPushSub.run(
+    userId,
+    sub.endpoint,
+    sub.keys?.p256dh ?? sub.p256dh,
+    sub.keys?.auth ?? sub.auth,
+    Date.now()
+  );
+}
+export function deletePushSubscription(userId, endpoint) {
+  deletePushSubByEndpoint.run(userId, endpoint);
+}
+export function deletePushSubscriptionByEndpoint(endpoint) {
+  deletePushSubByEndpointAny.run(endpoint);
+}
+export function listPushSubscriptions(userId) {
+  return selectPushSubsForUser.all(userId);
+}
+
+// ---- Daily call quota ----
+// Counts calls the user *participated in* in the trailing 24h window.
+const countCallsInLast24h = db.prepare(
+  'SELECT COUNT(*) AS n FROM call_history WHERE user_id = ? AND ended_at > ?'
+);
+export function callsUsedLast24h(userId) {
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  return countCallsInLast24h.get(userId, cutoff)?.n ?? 0;
 }

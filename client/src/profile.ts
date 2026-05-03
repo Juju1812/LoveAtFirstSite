@@ -22,6 +22,10 @@ export interface Profile {
   age_min?: number | null;
   age_max?: number | null;
   verified?: boolean;
+  /** User-picked palette of standard emoji reactions (max 8). */
+  reaction_emojis?: string[];
+  /** Pro-only: small image data URLs used as custom reactions (max 4). */
+  custom_reactions?: string[];
 }
 
 /** Returns the full list of photos for a profile (handles legacy single-photo). */
@@ -39,6 +43,49 @@ export function getPrimaryPhoto(p: Profile | null | undefined): string | undefin
 }
 
 export const MAX_PHOTOS = 6;
+
+// ---- Reaction palette ----
+export const MAX_REACTION_EMOJIS = 8;
+export const MAX_CUSTOM_REACTIONS = 4;
+export const MAX_CUSTOM_REACTION_BYTES = 60_000; // ~60KB per custom emoji data URL
+
+/** Default emoji stack — what the user gets if they haven't customized. */
+export const DEFAULT_REACTION_PALETTE: string[] = ['❤️', '😂', '🔥', '👀', '🥰', '🤯'];
+
+/** Big pickable list users can choose from when customizing their stack. */
+export const REACTION_EMOJI_OPTIONS: string[] = [
+  '❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍',
+  '💕', '💖', '💗', '💘', '💞', '💓', '💝', '💌',
+  '😂', '🤣', '😆', '😅', '😄', '😊', '😍', '🥰',
+  '😘', '😎', '🥺', '😏', '🤩', '🤗', '😋', '🙃',
+  '🔥', '✨', '💯', '🎉', '🥂', '🍷', '🍻', '☕',
+  '👀', '👁️', '💋', '🌹', '🌟', '⭐', '🌈', '☀️',
+  '🤯', '😮', '😱', '🤔', '🧐', '🙄', '😬', '🫠',
+  '👍', '👎', '👏', '🙌', '🤝', '🫶', '🤙', '✌️',
+  '😴', '😢', '🥲', '😭', '😤', '😡', '🤡', '💀',
+  '🐶', '🐱', '🐻', '🦄', '🐝', '🦋', '🐢', '🐙'
+];
+
+/** Resolve the user's actual emoji stack — falls back to default when unset/empty. */
+export function getReactionPalette(p: Profile | null | undefined): string[] {
+  const picked = p?.reaction_emojis;
+  if (Array.isArray(picked) && picked.length > 0) {
+    return picked.slice(0, MAX_REACTION_EMOJIS);
+  }
+  return DEFAULT_REACTION_PALETTE;
+}
+
+/** Pro custom reactions, normalized + capped. */
+export function getCustomReactions(p: Profile | null | undefined): string[] {
+  const c = p?.custom_reactions;
+  if (!Array.isArray(c)) return [];
+  return c.filter(x => typeof x === 'string' && x.startsWith('data:image/')).slice(0, MAX_CUSTOM_REACTIONS);
+}
+
+/** True when a reaction string is one of our custom-image data URLs. */
+export function isCustomReaction(s: string): boolean {
+  return typeof s === 'string' && s.startsWith('data:image/');
+}
 
 export const TOPICS: Array<{ id: string; label: string; emoji: string; blurb: string }> = [
   { id: 'any', label: 'Anything', emoji: '🎲', blurb: 'No filter — meet whoever shows up.' },
@@ -119,7 +166,43 @@ export function sanitizeIncomingProfile(p: any): Profile | null {
       .slice(0, 6);
     if (filtered.length > 0) out.photos = filtered;
   }
+  if (Array.isArray(p.reaction_emojis)) {
+    const cleaned = p.reaction_emojis
+      .filter((x: any) => typeof x === 'string' && x.length > 0 && x.length <= 12)
+      .slice(0, MAX_REACTION_EMOJIS);
+    if (cleaned.length > 0) out.reaction_emojis = cleaned;
+  }
   return out;
+}
+
+/** Resize an uploaded image to a small square JPEG/PNG dataURL for use as a custom emoji. */
+export async function resizeCustomReaction(file: File, maxDim = 128, quality = 0.85): Promise<string> {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const im = new Image();
+      im.onload = () => resolve(im);
+      im.onerror = reject;
+      im.src = url;
+    });
+    const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+    const w = Math.max(1, Math.round(img.width * scale));
+    const h = Math.max(1, Math.round(img.height * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('canvas unsupported');
+    ctx.drawImage(img, 0, 0, w, h);
+    // Prefer PNG for transparency-friendly stickers; fallback JPEG if too large.
+    let dataUrl = canvas.toDataURL('image/png');
+    if (dataUrl.length > MAX_CUSTOM_REACTION_BYTES) {
+      dataUrl = canvas.toDataURL('image/jpeg', quality);
+    }
+    return dataUrl;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }
 
 const VISITED_KEY = 'glimpse:visited:v1';

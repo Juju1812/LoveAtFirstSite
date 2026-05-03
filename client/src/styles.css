@@ -784,6 +784,90 @@ input {
 }
 .topbar-report:hover { background: rgba(255,77,77,0.15); border-color: rgba(255,77,77,0.3); }
 .topbar-report:active { transform: translateY(1px); }
+
+/* ---------- Topbar CC (captions) toggle ---------- */
+.topbar-cc {
+  height: 36px;
+  padding: 0 10px;
+  border-radius: 18px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.85);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.topbar-cc:hover { background: rgba(255,255,255,0.1); }
+.topbar-cc.is-on {
+  background: rgba(255,77,139,0.2);
+  border-color: rgba(255,77,139,0.5);
+  color: #fff;
+}
+.topbar-cc-locked { opacity: 0.85; }
+.topbar-cc-lock { font-size: 10px; }
+
+/* ---------- Connection quality indicator ---------- */
+.conn-ind {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 16px;
+  padding: 0 4px;
+}
+.conn-bar {
+  width: 4px;
+  background: rgba(255,255,255,0.18);
+  border-radius: 1px;
+  display: block;
+}
+.conn-bar:nth-child(1) { height: 6px; }
+.conn-bar:nth-child(2) { height: 10px; }
+.conn-bar:nth-child(3) { height: 14px; }
+.conn-ind-good .conn-bar-on { background: #4ade80; }
+.conn-ind-ok .conn-bar-on { background: #facc15; }
+.conn-ind-poor .conn-bar-on { background: #fb923c; }
+.conn-ind-lost .conn-bar { background: rgba(248,113,113,0.5); animation: conn-pulse 1.2s ease-in-out infinite; }
+@keyframes conn-pulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
+@media (max-width: 720px) {
+  .conn-ind { padding: 0 2px; }
+}
+
+/* ---------- Captions overlay ---------- */
+.captions-overlay {
+  position: absolute;
+  left: 50%;
+  bottom: 130px;
+  transform: translate(-50%, 8px);
+  z-index: 12;
+  max-width: min(720px, 90vw);
+  pointer-events: none;
+  opacity: 0;
+}
+.captions-overlay.is-visible {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+.captions-text {
+  display: inline-block;
+  padding: 10px 18px;
+  background: rgba(0, 0, 0, 0.78);
+  border-radius: 14px;
+  color: #fff;
+  font-size: 17px;
+  font-weight: 500;
+  line-height: 1.4;
+  text-align: center;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+}
+@media (max-width: 720px) {
+  .captions-overlay { bottom: 150px; }
+  .captions-text { font-size: 14px; padding: 8px 14px; }
+}
 .brand {
   font-weight: 700;
   font-size: 16px;
@@ -1007,8 +1091,11 @@ input {
 .chemistry-fill {
   height: 100%;
   border-radius: 999px;
-  transition: width 320ms ease, background 320ms ease;
+  /* Width is animated per-frame via RAF in ChemistryMeter (so no CSS transition
+     for width — they would fight). Color still eases for a soft hue shift. */
+  transition: background 320ms ease;
   box-shadow: 0 0 10px rgba(255,77,139,0.4);
+  will-change: width;
 }
 
 /* ---------- Timer ---------- */
@@ -1244,10 +1331,294 @@ input {
   transition: transform 120ms, background 120ms;
 }
 .reaction-emoji:hover:not(:disabled) { background: rgba(255,255,255,0.1); transform: scale(1.18); }
+.reaction-emoji-custom { padding: 0; overflow: hidden; }
+.reaction-emoji-custom img {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+  pointer-events: none;
+}
+.reaction-emoji-add {
+  font-size: 20px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.85);
+  background: rgba(255,255,255,0.05);
+  border: 1px dashed rgba(255,255,255,0.25);
+}
 
 @media (max-width: 720px) {
   .reactions-tray { bottom: 100px; }
 }
+
+/* ---------- Reaction creator modal ---------- */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  backdrop-filter: blur(6px);
+  display: grid;
+  place-items: center;
+  z-index: 60;
+  animation: modal-fade 160ms ease;
+}
+@keyframes modal-fade { from { opacity: 0; } to { opacity: 1; } }
+.modal {
+  background: #14141a;
+  color: #f0f0f5;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 18px;
+  padding: 24px;
+  width: min(560px, 92vw);
+  max-height: 88vh;
+  overflow-y: auto;
+  box-shadow: 0 30px 80px rgba(0,0,0,0.6);
+}
+.modal-header h2 { margin: 0 0 6px; }
+.modal-header p { margin: 0; color: #a8a8b3; font-size: 14px; }
+.modal-actions {
+  margin-top: 20px;
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+.reaction-creator-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+.reaction-creator-tile {
+  position: relative;
+  aspect-ratio: 1;
+  border-radius: 14px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.08);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+.reaction-creator-tile img {
+  width: 80%;
+  height: 80%;
+  object-fit: contain;
+}
+.reaction-creator-remove {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(0,0,0,0.7);
+  color: #fff;
+  border: 1px solid rgba(255,255,255,0.2);
+  font-size: 14px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.reaction-creator-add {
+  aspect-ratio: 1;
+  border-radius: 14px;
+  background: rgba(255,77,139,0.10);
+  border: 1px dashed rgba(255,77,139,0.5);
+  color: rgba(255,200,220,0.95);
+  font-size: 28px;
+  display: grid;
+  place-items: center;
+  gap: 4px;
+  cursor: pointer;
+  transition: background 160ms;
+}
+.reaction-creator-add:hover { background: rgba(255,77,139,0.18); }
+.reaction-creator-add-label { font-size: 12px; font-weight: 600; }
+
+/* ---------- Reaction stack editor (Settings) ---------- */
+.reaction-stack-editor { display: flex; flex-direction: column; gap: 18px; }
+.reaction-stack-preview {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 14px;
+  padding: 12px 14px;
+}
+.reaction-stack-preview-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #9595a3;
+  margin-bottom: 8px;
+}
+.reaction-stack-preview-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.reaction-stack-empty { color: #888; font-size: 13px; }
+.reaction-stack-chip {
+  width: 38px;
+  height: 38px;
+  border-radius: 999px;
+  background: rgba(255,77,139,0.15);
+  border: 1px solid rgba(255,77,139,0.4);
+  font-size: 22px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  padding: 0;
+}
+.reaction-stack-chip-on { background: rgba(255,77,139,0.22); }
+.reaction-stack-chip-custom {
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  cursor: default;
+}
+.reaction-stack-chip-custom img {
+  width: 26px; height: 26px; object-fit: contain;
+}
+.reaction-stack-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(44px, 1fr));
+  gap: 6px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 12px;
+  padding: 10px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+.reaction-stack-grid-cell {
+  width: 100%;
+  aspect-ratio: 1;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font-size: 22px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms, transform 120ms;
+}
+.reaction-stack-grid-cell:hover { background: rgba(255,255,255,0.06); }
+.reaction-stack-grid-cell.is-on {
+  background: rgba(255,77,139,0.18);
+  border-color: rgba(255,77,139,0.55);
+}
+.reaction-stack-custom-section { margin-top: 6px; }
+.reaction-stack-custom-header h3 {
+  margin: 0 0 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+}
+.reaction-stack-custom-header p { margin: 0 0 6px; color: #9595a3; font-size: 13px; }
+
+/* ---------- Verify modal ---------- */
+.verify-modal { width: min(440px, 92vw); }
+.verify-stage {
+  position: relative;
+  width: 280px;
+  height: 280px;
+  margin: 16px auto 0;
+  border-radius: 50%;
+  overflow: hidden;
+  background: #000;
+  border: 2px solid rgba(255,77,139,0.4);
+  box-shadow: 0 0 36px rgba(255,77,139,0.25);
+}
+.verify-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1);
+}
+.verify-mask {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 2px rgba(255,255,255,0.05);
+}
+.verify-progress {
+  position: absolute;
+  left: 10%;
+  right: 10%;
+  bottom: 14px;
+  height: 4px;
+  background: rgba(255,255,255,0.18);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.verify-progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #ff77a1, #ff2e63);
+  transition: width 120ms linear;
+}
+.verify-hint {
+  text-align: center;
+  margin: 14px 0 0;
+  color: #c8c8d2;
+  font-size: 14px;
+  line-height: 1.4;
+  min-height: 40px;
+}
+
+/* ---------- Push notification toggle row ---------- */
+.notif-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* ---------- Likes upsell banner ---------- */
+.likes-upsell {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  margin: 0 0 16px;
+  background: linear-gradient(135deg, rgba(255,77,139,0.18), rgba(255,46,99,0.10));
+  border: 1px solid rgba(255,77,139,0.4);
+  border-radius: 14px;
+}
+.likes-upsell-text { flex: 1; font-size: 14px; color: #f5f5f8; line-height: 1.4; }
+.likes-upsell-text strong { color: #fff; font-weight: 700; }
+.likes-upsell-cta {
+  white-space: nowrap;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--pink), var(--pink-2));
+  color: #fff;
+  font-weight: 700;
+  font-size: 13px;
+  text-decoration: none;
+}
+.likes-upsell-cta:hover { transform: translateY(-1px); }
+
+/* Locked / redacted like card */
+.like-card-redacted { opacity: 0.96; }
+.like-photo-locked {
+  background: linear-gradient(135deg, rgba(255,77,139,0.25), rgba(255,46,99,0.15));
+  color: rgba(255,255,255,0.7);
+  font-size: 28px;
+}
+
+/* ---------- Photo grid upsell ---------- */
+.photo-grid-upsell {
+  margin-left: 10px;
+  font-size: 12px;
+  color: rgba(255,180,200,0.95);
+  text-decoration: none;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255,77,139,0.15);
+  border: 1px solid rgba(255,77,139,0.35);
+}
+.photo-grid-upsell:hover { background: rgba(255,77,139,0.22); }
 
 /* ---------- Mute / Cam toggle buttons ---------- */
 .ctrl-toggle {
@@ -2933,6 +3304,64 @@ input {
 .saved-empty-icon { font-size: 48px; margin-bottom: 14px; }
 .saved-empty h2 { font-size: 22px; margin: 0 0 10px; }
 .saved-empty p { color: var(--gray); font-size: 14px; line-height: 1.5; max-width: 400px; margin: 0 auto 20px; }
+
+/* ---------- Icebreaker prompt ---------- */
+.icebreaker {
+  position: absolute;
+  top: 90px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px 12px 18px;
+  background: linear-gradient(180deg, rgba(40, 12, 30, 0.92), rgba(22, 8, 20, 0.92));
+  border: 1px solid rgba(255,77,139,0.5);
+  border-radius: 999px;
+  box-shadow: 0 12px 32px rgba(0,0,0,0.5);
+  backdrop-filter: blur(10px);
+  max-width: 88%;
+  animation: icebreaker-in 380ms cubic-bezier(.2,.8,.2,1), icebreaker-out 600ms ease-out 26.5s forwards;
+}
+@keyframes icebreaker-in {
+  from { opacity: 0; transform: translate(-50%, -12px) scale(0.96); }
+  to { opacity: 1; transform: translate(-50%, 0) scale(1); }
+}
+@keyframes icebreaker-out {
+  to { opacity: 0; transform: translate(-50%, -8px); pointer-events: none; }
+}
+.icebreaker-eyebrow {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1.4px;
+  color: rgba(255,180,200,0.9);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.icebreaker-text {
+  font-size: 15px;
+  font-weight: 600;
+  color: #fff;
+  line-height: 1.3;
+}
+.icebreaker-close {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.1);
+  border: none;
+  color: rgba(255,255,255,0.7);
+  font-size: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.icebreaker-close:hover { background: rgba(255,255,255,0.2); color: #fff; }
+@media (max-width: 720px) {
+  .icebreaker { top: 76px; padding: 10px 12px 10px 14px; gap: 8px; }
+  .icebreaker-text { font-size: 13px; }
+  .icebreaker-eyebrow { display: none; }
+}
 
 /* ---------- AI Coach overlay ---------- */
 .ai-coach {

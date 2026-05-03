@@ -268,16 +268,24 @@ export function scoreText(text: string): number {
  * Update the running 0-100 chemistry score given a new message score in [-1, 1].
  * EMA-blended toward (50 + 50*msgScore), with positive moves slightly faster than
  * negative (a single mean comment shouldn't tank a good vibe).
+ *
+ * Tuning notes: alphas are deliberately low so a single noisy signal can't
+ * yank the meter — the score is meant to *trend* over a 2-min call, not
+ * twitch with every word. Strong signals still pull harder via the
+ * magnitude-scaled term.
  */
 export function nextChemistry(prev: number, msgScore: number): number {
   const target = 50 + 50 * msgScore;
-
-  // Bigger swings respond faster — strong signals shouldn't be diluted
   const magnitude = Math.abs(msgScore);
+
+  // Dead zone: tiny signals don't move the meter at all. Keeps face/speech
+  // micro-fluctuations from constantly nudging the bar.
+  if (magnitude < 0.08) return prev;
+
   let alpha = msgScore > 0
-    ? 0.30 + magnitude * 0.25  // up to 0.55 for very positive
-    : 0.22 + magnitude * 0.18; // up to 0.40 for very negative
-  alpha = Math.min(alpha, 0.6);
+    ? 0.12 + magnitude * 0.22  // 0.12..0.34
+    : 0.10 + magnitude * 0.18; // 0.10..0.28
+  alpha = Math.min(alpha, 0.4);
 
   const next = prev + (target - prev) * alpha;
   return Math.max(0, Math.min(100, next));

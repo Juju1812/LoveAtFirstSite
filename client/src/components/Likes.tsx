@@ -125,6 +125,16 @@ export function Likes() {
 
       {error && <div className="auth-error">{error}</div>}
 
+      {data?.redacted && tab === 'received' && (
+        <div className="likes-upsell">
+          <div className="likes-upsell-text">
+            <strong>{data.received_count ?? data.received_only.length} {data.received_count === 1 ? 'person likes' : 'people like'} you.</strong>
+            <span> Get Glimpse+ to see who they are.</span>
+          </div>
+          <Link to="/upgrade" className="likes-upsell-cta">✨ Unlock</Link>
+        </div>
+      )}
+
       {data == null ? (
         <div className="saved-empty"><p>Loading…</p></div>
       ) : list.length === 0 ? (
@@ -166,6 +176,23 @@ function LikeCard({
   entry: LikeEntry; tab: Tab; busy: boolean;
   onLikeBack: () => void; onDismiss: () => void; onUnlike: () => void;
 }) {
+  if (entry.redacted) {
+    return (
+      <li className="like-card like-card-redacted">
+        <div className="like-photo like-photo-empty like-photo-locked">🔒</div>
+        <div className="like-meta">
+          <div className="like-name">Someone likes you</div>
+          <div className="like-bio">Get Glimpse+ to see their profile.</div>
+          {entry.topic && <div className="like-topic">{entry.topic}</div>}
+        </div>
+        <div className="like-actions">
+          <Link to="/upgrade" className="like-back-btn" style={{ textDecoration: 'none' }}>
+            ✨ Reveal
+          </Link>
+        </div>
+      </li>
+    );
+  }
   return (
     <li className="like-card">
       {entry.photo

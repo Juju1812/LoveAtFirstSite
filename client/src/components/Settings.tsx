@@ -1,12 +1,17 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
-import { openBillingPortal } from '../api';
+import { openBillingPortal, requestVerification } from '../api';
+import { ReactionStackEditor } from './ReactionStackEditor';
+import { VerifyModal } from './VerifyModal';
+import { NotificationToggle } from './NotificationToggle';
+import { type Profile } from '../profile';
 
 export function Settings() {
-  const { user, profile } = useAuth();
+  const { user, profile, setProfile, refresh } = useAuth();
   const [billingBusy, setBillingBusy] = useState(false);
   const [billingError, setBillingError] = useState<string | null>(null);
+  const [verifyOpen, setVerifyOpen] = useState(false);
 
   async function manageSubscription() {
     setBillingBusy(true); setBillingError(null);
@@ -62,11 +67,32 @@ export function Settings() {
         </div>
       )}
 
+      {/* Reaction stack */}
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <h2>Reactions</h2>
+          <p>Pick the emojis that show up in your in-call reaction tray. Glimpse+ members can also upload their own images.</p>
+        </div>
+        <ReactionStackEditor
+          initialEmojis={profile?.reaction_emojis ?? []}
+          initialCustom={profile?.custom_reactions ?? []}
+          isPremium={!!user?.premium}
+          onSave={async ({ reaction_emojis, custom_reactions }) => {
+            const updated: Profile = {
+              ...(profile ?? {}),
+              reaction_emojis,
+              custom_reactions
+            };
+            await setProfile(updated);
+          }}
+        />
+      </div>
+
       {/* Identity verification (optional) */}
       <div className="settings-section">
         <div className="settings-section-header">
           <h2>Identity verification</h2>
-          <p>Optional. Verify once and matches see a small badge — we don't push this. It's just a way to build trust if you want.</p>
+          <p>Optional. Take a quick selfie — we check it's a real face and (if you have a primary photo) that it matches you. Verified profiles get a badge.</p>
         </div>
         <div className="verify-row">
           <div className="verify-status">
@@ -76,14 +102,45 @@ export function Settings() {
               <span className="verify-badge verify-badge-off">Not verified</span>
             )}
           </div>
-          <button className="settings-edit-btn" disabled>
-            {profile?.verified ? 'Re-verify' : 'Verify (coming soon)'}
+          <button
+            className="settings-edit-btn"
+            disabled={!user}
+            onClick={() => setVerifyOpen(true)}
+            style={{ cursor: user ? 'pointer' : 'not-allowed' }}
+          >
+            {profile?.verified ? 'Re-verify' : 'Verify now'}
           </button>
         </div>
         <div className="settings-fineprint">
-          Verification will use a quick selfie + photo-ID match. We never store the ID — only the pass/fail result.
+          Runs entirely in your browser. We only store the pass/fail outcome — never the selfie itself.
         </div>
       </div>
+
+      {/* Push notifications */}
+      {user && (
+        <div className="settings-section">
+          <div className="settings-section-header">
+            <h2>Notifications</h2>
+            <p>Get a push when someone likes you, you get a mutual match, or a message arrives.</p>
+          </div>
+          <NotificationToggle />
+        </div>
+      )}
+
+      {verifyOpen && (
+        <VerifyModal
+          profile={profile}
+          onClose={() => setVerifyOpen(false)}
+          onVerified={async () => {
+            try {
+              await requestVerification();
+              await refresh();
+            } catch (err) {
+              console.warn('Server-side verification flag failed', err);
+            }
+          }}
+        />
+      )}
 
       <div className="settings-section">
         <div className="settings-section-header">

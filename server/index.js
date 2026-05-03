@@ -6,7 +6,7 @@ import {
   db,
   recordMatch, recordContact, recordReport,
   createUser, getUserByEmail, getUserById,
-  saveUserProfile, getUserProfile,
+  saveUserProfile, getUserProfile, markUserVerified,
   saveConnection, unsaveConnection, listSavedConnections,
   ensureConversation, sendMessage, listConversations, listMessages,
   checkParticipant, markConversationRead,
@@ -15,9 +15,12 @@ import {
   recordContentReport, getOpenReports,
   recordLike, dismissLike, undoMyLike, getLikesReceived, getLikesGiven,
   setUserStripeCustomer, updateSubscriptionStatus, getUserByStripeCustomer,
-  getFullUser, isUserPremium
+  getFullUser, isUserPremium,
+  savePushSubscription, deletePushSubscription, deletePushSubscriptionByEndpoint, listPushSubscriptions,
+  callsUsedLast24h
 } from './db.js';
 import Stripe from 'stripe';
+import webpush from 'web-push';
 import {
   hashPassword, verifyPassword, signToken,
   authMiddleware, requireAuth
@@ -48,6 +51,46 @@ const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || 'https://glimpse.dating';
 const stripe = STRIPE_KEY ? new Stripe(STRIPE_KEY) : null;
 if (!stripe) {
   console.warn('[stripe] STRIPE_SECRET_KEY not set — Glimpse+ disabled.');
+}
+
+// ---- Web push (VAPID) ----
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY;
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
+const VAPID_SUBJECT = process.env.VAPID_SUBJECT || `mailto:hello@${(PUBLIC_BASE_URL || 'glimpse.dating').replace(/^https?:\/\//, '')}`;
+const pushEnabled = !!(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY);
+if (pushEnabled) {
+  try {
+    webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+  } catch (err) {
+    console.warn('[push] Failed to configure VAPID', err.message);
+  }
+} else {
+  console.warn('[push] VAPID keys not set — push notifications disabled.');
+}
+
+// Best-effort send to all of a user's subscriptions. Failed endpoints are
+// pruned (404/410 = device unsubscribed). Never throws to the caller.
+async function sendPushToUser(userId, payload) {
+  if (!pushEnabled || !userId) return;
+  let subs;
+  try { subs = listPushSubscriptions(userId); } catch { return; }
+  if (!subs || subs.length === 0) return;
+  const json = JSON.stringify(payload);
+  await Promise.all(subs.map(async (s) => {
+    try {
+      await webpush.sendNotification(
+        { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
+        json
+      );
+    } catch (err) {
+      const status = err?.statusCode ?? err?.status;
+      if (status === 404 || status === 410) {
+        try { deletePushSubscriptionByEndpoint(s.endpoint); } catch { /* noop */ }
+      } else {
+        console.warn('push send failed', status, err?.body || err?.message);
+      }
+    }
+  }));
 }
 
 // Webhook MUST receive raw body for signature verification — register BEFORE express.json()
@@ -257,12 +300,14 @@ app.put('/api/profile', requireAuth, (req, res) => {
     typeof v === 'number' && v >= 13 && v <= 120 ? Math.floor(v) : null;
   const gender = validGenders.includes(p.gender) ? p.gender : null;
 
-  // Validate photos array (up to 6 data URLs, each <400KB raw)
+  // Validate photos array. Free tier capped at 3, premium at 6.
+  const isPremiumForPhotos = isUserPremium(req.userId);
+  const photoCap = isPremiumForPhotos ? 6 : 3;
   let photos = null;
   if (Array.isArray(p.photos)) {
     photos = p.photos
       .filter(x => typeof x === 'string' && x.startsWith('data:image/') && x.length < 400_000)
-      .slice(0, 6);
+      .slice(0, photoCap);
     if (photos.length === 0) photos = null;
   }
   // Backward-compat: if only `photo` was sent, treat as photos[0]
@@ -271,6 +316,24 @@ app.put('/api/profile', requireAuth, (req, res) => {
   if (!photos && legacyPhoto) photos = [legacyPhoto];
   // First photo always populates the legacy `photo` column for fast reads
   const primaryPhoto = photos?.[0] ?? legacyPhoto ?? null;
+
+  // Reaction palette: list of short emoji strings (max 8 entries, max 12 chars each).
+  let reactionEmojis = null;
+  if (Array.isArray(p.reaction_emojis)) {
+    reactionEmojis = p.reaction_emojis
+      .filter(x => typeof x === 'string' && x.length > 0 && x.length <= 12)
+      .slice(0, 8);
+    if (reactionEmojis.length === 0) reactionEmojis = null;
+  }
+  // Custom reactions: data URLs, ≤60KB each, max 4. Premium-only.
+  let customReactions = null;
+  const isPremium = isPremiumForPhotos;
+  if (isPremium && Array.isArray(p.custom_reactions)) {
+    customReactions = p.custom_reactions
+      .filter(x => typeof x === 'string' && x.startsWith('data:image/') && x.length < 80_000)
+      .slice(0, 4);
+    if (customReactions.length === 0) customReactions = null;
+  }
 
   const safe = {
     name: typeof p.name === 'string' ? p.name.slice(0, 60).trim() || null : null,
@@ -283,10 +346,62 @@ app.put('/api/profile', requireAuth, (req, res) => {
     gender,
     looking_for: validLF(p.looking_for),
     age_min: ageInt(p.age_min),
-    age_max: ageInt(p.age_max)
+    age_max: ageInt(p.age_max),
+    reaction_emojis: reactionEmojis,
+    custom_reactions: customReactions
   };
   saveUserProfile(req.userId, safe);
   res.json({ profile: safe });
+});
+
+// ---- Push notifications ----
+app.get('/api/push/public-key', (_req, res) => {
+  res.json({ publicKey: pushEnabled ? VAPID_PUBLIC_KEY : null });
+});
+
+app.post('/api/push/subscribe', requireAuth, (req, res) => {
+  const sub = req.body ?? {};
+  const endpoint = typeof sub.endpoint === 'string' ? sub.endpoint : null;
+  const p256dh = sub.keys?.p256dh ?? sub.p256dh;
+  const auth = sub.keys?.auth ?? sub.auth;
+  if (!endpoint || !p256dh || !auth) {
+    return res.status(400).json({ error: 'Invalid subscription' });
+  }
+  try {
+    savePushSubscription(req.userId, sub);
+    res.json({ ok: true });
+  } catch (err) {
+    console.warn('save push sub failed', err);
+    res.status(500).json({ error: 'Could not save subscription' });
+  }
+});
+
+app.post('/api/push/unsubscribe', requireAuth, (req, res) => {
+  const endpoint = req.body?.endpoint;
+  if (typeof endpoint !== 'string') return res.status(400).json({ error: 'No endpoint' });
+  deletePushSubscription(req.userId, endpoint);
+  res.json({ ok: true });
+});
+
+// ---- Daily call quota (free-tier limit) ----
+const FREE_DAILY_CALL_LIMIT = parseInt(process.env.FREE_DAILY_CALL_LIMIT || '10', 10);
+app.get('/api/quota', requireAuth, (req, res) => {
+  const isPremium = isUserPremium(req.userId);
+  const used = callsUsedLast24h(req.userId);
+  res.json({
+    used,
+    limit: isPremium ? null : FREE_DAILY_CALL_LIMIT,
+    remaining: isPremium ? null : Math.max(0, FREE_DAILY_CALL_LIMIT - used)
+  });
+});
+
+// ---- Identity verification ----
+// Client-side check has already passed; we trust it and just flip the flag.
+// (Server is not running ML models for this — the check happens in the browser
+//  using MediaPipe FaceLandmarker, see client/src/verifyFace.ts.)
+app.post('/api/profile/verify', requireAuth, (req, res) => {
+  markUserVerified(req.userId);
+  res.json({ ok: true });
 });
 
 // ---- Saved connections ----
@@ -344,11 +459,25 @@ app.post('/api/conversations/:id/messages', requireAuth, async (req, res) => {
 
   const msg = sendMessage(id, req.userId, text);
   // Notify peer if connected
-  const userSocketIds = userSockets.get(getOtherParticipant(id, req.userId));
+  const peerUid = getOtherParticipant(id, req.userId);
+  const userSocketIds = userSockets.get(peerUid);
   if (userSocketIds) {
     for (const sid of userSocketIds) {
       io.to(sid).emit('message', { conversationId: id, message: msg });
     }
+  }
+  // Push to peer if subscribed. We don't try to detect "tab is focused" — the
+  // notification gets delivered either way, and most browsers suppress it on
+  // an active tab anyway.
+  if (peerUid) {
+    const me = getUserById(req.userId);
+    const senderName = me?.email?.split('@')[0] || 'Someone';
+    sendPushToUser(peerUid, {
+      title: `${senderName} sent a message`,
+      body: text.slice(0, 120),
+      url: `/messages/${id}`,
+      tag: `msg-${id}`
+    });
   }
   res.json({ message: msg });
 });
@@ -387,8 +516,30 @@ app.get('/api/likes', requireAuth, (req, res) => {
   const given = getLikesGiven(req.userId);
   // Mutual = received entries where i_liked_them = 1 (or given where they_liked_me = 1)
   const mutualUserIds = new Set(received.filter(r => r.i_liked_them).map(r => r.user_id));
+  const receivedOnly = received.filter(r => !r.i_liked_them);
+  const isPremium = isUserPremium(req.userId);
+  // Free tier: hide identifying details on inbound likes (the carrot for upgrade).
+  // Mutual likes always show fully — those are matches, not leads.
+  const redactedReceived = isPremium
+    ? receivedOnly
+    : receivedOnly.map(r => ({
+        user_id: r.user_id,
+        topic: r.topic,
+        chemistry: r.chemistry,
+        liked_at: r.liked_at,
+        i_liked_them: r.i_liked_them,
+        // strip identity fields
+        name: null,
+        photo: null,
+        bio: null,
+        vibes: null,
+        age: null,
+        redacted: true
+      }));
   res.json({
-    received_only: received.filter(r => !r.i_liked_them),
+    received_only: redactedReceived,
+    received_count: receivedOnly.length,
+    redacted: !isPremium && receivedOnly.length > 0,
     mutual: received.filter(r => r.i_liked_them),
     given_only: given.filter(g => !g.they_liked_me && !mutualUserIds.has(g.user_id))
   });
@@ -515,12 +666,15 @@ app.post('/api/coach', async (req, res) => {
   if (!ANTHROPIC_KEY) {
     return res.json({ tip: null, reason: 'coach-disabled' });
   }
-  // Light per-IP throttle to keep costs sane.
+  // Pro-only feature. Free tier never gets a tip.
+  const premium = req.userId ? isUserPremium(req.userId) : false;
+  if (!premium) {
+    return res.json({ tip: null, reason: 'premium-only' });
+  }
+  // Light per-IP throttle to keep costs sane even for premium.
   const ip = req.ip || req.socket?.remoteAddress || 'unknown';
   const last = lastCoachByIp.get(ip) || 0;
-  // Premium users skip the rate limit
-  const premium = req.userId ? isUserPremium(req.userId) : false;
-  if (!premium && Date.now() - last < COACH_RATE_MS) {
+  if (Date.now() - last < COACH_RATE_MS) {
     return res.json({ tip: null, reason: 'rate-limited' });
   }
   lastCoachByIp.set(ip, Date.now());
@@ -803,6 +957,17 @@ io.on('connection', (socket) => {
     const existing = queue.findIndex(q => q.socketId === socket.id);
     if (existing !== -1) queue.splice(existing, 1);
 
+    // Free-tier daily call cap. Premium = unlimited. Anonymous (no userId) = unlimited
+    // (no way to track them across reconnects anyway — they're already friction-gated
+    // by signing up to like/match).
+    if (socket.userId && !isUserPremium(socket.userId)) {
+      const used = callsUsedLast24h(socket.userId);
+      if (used >= FREE_DAILY_CALL_LIMIT) {
+        socket.emit('quota-exceeded', { used, limit: FREE_DAILY_CALL_LIMIT });
+        return;
+      }
+    }
+
     const topic = typeof opts.topic === 'string' ? opts.topic.slice(0, 30) : 'any';
     const prefs = (opts.prefs && typeof opts.prefs === 'object') ? {
       gender: typeof opts.prefs.gender === 'string' ? opts.prefs.gender : null,
@@ -878,11 +1043,15 @@ io.on('connection', (socket) => {
     io.to(peer).emit('peer-swiped-right');
 
     // Persist the like for logged-in users (independent of mutual outcome)
+    let myUidForPush = null;
+    let peerUidForPush = null;
     try {
       const myIdx = session.users[0] === socket.id ? 0 : 1;
       const peerIdx = 1 - myIdx;
       const myUid = session.userIds?.[myIdx];
       const peerUid = session.userIds?.[peerIdx];
+      myUidForPush = myUid;
+      peerUidForPush = peerUid;
       if (myUid && peerUid) {
         recordLike(myUid, peerUid, {
           topic: session.topic,
@@ -904,6 +1073,30 @@ io.on('connection', (socket) => {
       }
       io.to(aSocket).emit('matched', { matchId: session.matchDbId, chemistry: session.chemistry, peerUserId: bUid, conversationId: convoId });
       io.to(bSocket).emit('matched', { matchId: session.matchDbId, chemistry: session.chemistry, peerUserId: aUid, conversationId: convoId });
+
+      // Mutual match push — only if user isn't already focused on the app.
+      sendPushToUser(aUid, {
+        title: "It's a match! ✨",
+        body: 'You both swiped right. Say hi.',
+        url: convoId ? `/messages/${convoId}` : '/likes',
+        tag: `match-${aUid}-${bUid}`
+      });
+      sendPushToUser(bUid, {
+        title: "It's a match! ✨",
+        body: 'You both swiped right. Say hi.',
+        url: convoId ? `/messages/${convoId}` : '/likes',
+        tag: `match-${bUid}-${aUid}`
+      });
+    } else {
+      // One-sided like — let the recipient know someone liked them.
+      if (peerUidForPush) {
+        sendPushToUser(peerUidForPush, {
+          title: 'Someone liked you 💘',
+          body: 'A new admirer is waiting in your Likes.',
+          url: '/likes',
+          tag: `like-${peerUidForPush}`
+        });
+      }
     }
   });
 
