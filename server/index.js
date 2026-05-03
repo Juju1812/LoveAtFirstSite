@@ -248,5 +248,5 @@ io.on('connection', (socket) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`LoveAtFirstSite signaling server listening on http://localhost:${PORT}`);
+  console.log(`Glimpse signaling server listening on http://localhost:${PORT}`);
 });

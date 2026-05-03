@@ -248,7 +248,7 @@ export function App() {
   return (
     <div className="app">
       <header className="topbar">
-        <div className="brand">LoveAtFirstSite</div>
+        <div className="brand">Glimpse</div>
         <ChemistryMeter score={chemistry} />
         <Timer secondsLeft={secondsLeft} />
       </header>
@@ -332,9 +332,9 @@ function Lobby({ onStart, starting, mediaError, onDismissError }: LobbyProps) {
   return (
     <div className="lobby">
       <div className="lobby-card">
-        <div className="lobby-logo">💘</div>
-        <h1>LoveAtFirstSite</h1>
-        <p className="lobby-tag">60 seconds. One face. No filter.</p>
+        <div className="lobby-logo">👀</div>
+        <h1>Glimpse</h1>
+        <p className="lobby-tag">60 seconds. One glimpse. No filter.</p>
         <ul className="lobby-rules">
           <li>📹 Random 1-on-1 video chat</li>
           <li>⏳ 60s before swipe unlocks</li>
