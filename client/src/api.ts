@@ -80,3 +80,78 @@ export async function unsaveConnection(userId: number): Promise<void> {
 export async function getCoachTip(input: { transcripts: string[]; topic?: string; secondsLeft?: number }): Promise<{ tip: string | null }> {
   return apiFetch('/api/coach', { method: 'POST', body: JSON.stringify(input) });
 }
+
+// ---- Messaging ----
+export interface ConversationSummary {
+  id: number;
+  peer_id: number;
+  peer_name: string | null;
+  peer_photo: string | null;
+  peer_bio: string | null;
+  last_body: string | null;
+  last_sender: number | null;
+  last_msg_at: number;
+  unread: number;
+}
+
+export interface Message {
+  id: number;
+  sender_id: number;
+  body: string;
+  sent_at: number;
+}
+
+export async function listConversations(): Promise<{ conversations: ConversationSummary[] }> {
+  return apiFetch('/api/conversations');
+}
+export async function listMessages(conversationId: number): Promise<{ messages: Message[] }> {
+  return apiFetch(`/api/conversations/${conversationId}/messages`);
+}
+export async function postMessage(conversationId: number, body: string): Promise<{ message: Message }> {
+  return apiFetch(`/api/conversations/${conversationId}/messages`, { method: 'POST', body: JSON.stringify({ body }) });
+}
+export async function markRead(conversationId: number): Promise<void> {
+  await apiFetch(`/api/conversations/${conversationId}/read`, { method: 'POST' });
+}
+
+// ---- Events ----
+export interface DatingEvent {
+  id: number;
+  name: string;
+  description: string | null;
+  starts_at: number;
+  ends_at: number;
+  topic: string | null;
+  age_min: number | null;
+  age_max: number | null;
+  max_participants: number | null;
+  rsvpd: boolean;
+  rsvp_count: number;
+}
+export async function listEvents(): Promise<{ events: DatingEvent[] }> {
+  return apiFetch('/api/events');
+}
+export async function rsvpToEvent(id: number): Promise<void> {
+  await apiFetch(`/api/events/${id}/rsvp`, { method: 'POST' });
+}
+export async function unrsvpFromEvent(id: number): Promise<void> {
+  await apiFetch(`/api/events/${id}/rsvp`, { method: 'DELETE' });
+}
+
+// ---- Insights ----
+export interface InsightsSummary {
+  total_calls: number;
+  avg_chemistry: number;
+  avg_peak: number;
+  match_rate_pct: number;
+  best_topic: string | null;
+  best_topic_avg: number | null;
+}
+export async function getInsights(): Promise<{ history: any[]; summary: InsightsSummary | null }> {
+  return apiFetch('/api/insights');
+}
+
+// ---- Moderation ----
+export async function moderateText(text: string): Promise<{ flagged: boolean; categories?: string[] }> {
+  return apiFetch('/api/moderate-text', { method: 'POST', body: JSON.stringify({ text }) });
+}

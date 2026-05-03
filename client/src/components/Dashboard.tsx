@@ -2,7 +2,10 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
 import { TOPICS, hasMeaningfulProfile } from '../profile';
-import { listSaved, type SavedConnection } from '../api';
+import {
+  listSaved, listConversations, listEvents, getInsights,
+  type SavedConnection, type ConversationSummary, type DatingEvent, type InsightsSummary
+} from '../api';
 
 interface Props {
   onStart: (topic: string) => void;
@@ -14,18 +17,25 @@ export function Dashboard({ onStart }: Props) {
   const [topic, setTopic] = useState<string>('any');
   const [savedCount, setSavedCount] = useState(0);
   const [savedMutual, setSavedMutual] = useState(0);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [upcomingEvents, setUpcomingEvents] = useState<DatingEvent[]>([]);
+  const [insights, setInsights] = useState<InsightsSummary | null>(null);
 
-  // Load saved-connections summary if logged in
   useEffect(() => {
-    if (!user) return;
     let cancelled = false;
-    listSaved()
-      .then(({ saved }) => {
-        if (cancelled) return;
-        setSavedCount(saved.length);
-        setSavedMutual(saved.filter((s: SavedConnection) => s.mutual).length);
-      })
-      .catch(() => { /* ignore */ });
+    if (user) {
+      Promise.all([
+        listSaved().then(({ saved }) => { if (!cancelled) {
+          setSavedCount(saved.length);
+          setSavedMutual(saved.filter((s: SavedConnection) => s.mutual).length);
+        }}).catch(() => {}),
+        listConversations().then(({ conversations }) => {
+          if (!cancelled) setUnreadCount(conversations.filter((c: ConversationSummary) => c.unread).length);
+        }).catch(() => {}),
+        getInsights().then(({ summary }) => { if (!cancelled) setInsights(summary); }).catch(() => {})
+      ]);
+    }
+    listEvents().then(({ events }) => { if (!cancelled) setUpcomingEvents(events.slice(0, 3)); }).catch(() => {});
     return () => { cancelled = true; };
   }, [user]);
 
@@ -44,6 +54,10 @@ export function Dashboard({ onStart }: Props) {
           <span>👀</span><span className="dash-logo-text">Glimpse</span>
         </Link>
         <div className="dash-nav-actions">
+          <Link to="/messages" className="dash-nav-link">
+            Messages {unreadCount > 0 && <span className="dash-nav-badge">{unreadCount}</span>}
+          </Link>
+          <Link to="/events" className="dash-nav-link">Events</Link>
           <Link to="/saved" className="dash-nav-link">Saved {savedMutual > 0 && <span className="dash-nav-badge">{savedMutual}</span>}</Link>
           <Link to="/settings" className="dash-nav-link">Settings</Link>
           {user ? (
@@ -134,10 +148,74 @@ export function Dashboard({ onStart }: Props) {
           </button>
         </div>
 
+        {upcomingEvents.length > 0 && (
+          <section className="dash-card">
+            <div className="dash-card-header-row">
+              <div>
+                <div className="dash-section-eyebrow">Upcoming events</div>
+                <div className="dash-card-title">Themed nights worth showing up for</div>
+              </div>
+              <Link to="/events" className="dash-link-arrow">See all →</Link>
+            </div>
+            <ul className="dash-event-mini-list">
+              {upcomingEvents.map(ev => (
+                <li key={ev.id} className="dash-event-mini">
+                  <div className="dash-event-mini-meta">
+                    <div className="dash-event-mini-name">{ev.name}</div>
+                    <div className="dash-event-mini-when">{formatEventWhen(ev.starts_at)}</div>
+                  </div>
+                  <div className="dash-event-mini-status">
+                    {ev.rsvpd ? <span className="dash-event-rsvpd">✓ Going</span> : <span className="dash-event-count">{ev.rsvp_count} going</span>}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        {insights && insights.total_calls >= 3 && (
+          <section className="dash-card">
+            <div className="dash-section-eyebrow">Your insights</div>
+            <div className="dash-card-title">After {insights.total_calls} calls — here's your read</div>
+            <div className="insights-grid">
+              <div className="insight-stat">
+                <div className="insight-stat-value">{insights.avg_chemistry}%</div>
+                <div className="insight-stat-label">Avg chemistry</div>
+              </div>
+              <div className="insight-stat">
+                <div className="insight-stat-value">{insights.avg_peak}%</div>
+                <div className="insight-stat-label">Avg peak</div>
+              </div>
+              <div className="insight-stat">
+                <div className="insight-stat-value">{insights.match_rate_pct}%</div>
+                <div className="insight-stat-label">Match rate</div>
+              </div>
+              {insights.best_topic && (
+                <div className="insight-stat insight-stat-wide">
+                  <div className="insight-stat-value insight-best-topic">{insights.best_topic}</div>
+                  <div className="insight-stat-label">Your best topic ({insights.best_topic_avg}% avg)</div>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+
         <div className="dash-footer-link">
           New here? <Link to="/about">See how Glimpse works →</Link>
         </div>
       </main>
     </div>
   );
+}
+
+function formatEventWhen(ts: number): string {
+  const d = new Date(ts);
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  const tomorrow = new Date(now); tomorrow.setDate(tomorrow.getDate() + 1);
+  const isTomorrow = d.toDateString() === tomorrow.toDateString();
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  if (sameDay) return `Today · ${time}`;
+  if (isTomorrow) return `Tomorrow · ${time}`;
+  return d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }) + ` · ${time}`;
 }

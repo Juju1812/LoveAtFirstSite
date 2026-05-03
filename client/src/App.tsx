@@ -22,7 +22,9 @@ import { SavedList } from './components/SavedList';
 import { AICoach } from './components/AICoach';
 import { type Profile, sanitizeIncomingProfile, isFirstVisit, markVisited } from './profile';
 import { useAuth } from './AuthContext';
-import { saveConnection, getToken } from './api';
+import { saveConnection, getToken, moderateText } from './api';
+import { Inbox, Conversation } from './components/Messaging';
+import { Events } from './components/Events';
 
 const SIGNAL_URL =
   (import.meta.env.VITE_SIGNAL_URL as string | undefined) ??
@@ -48,6 +50,9 @@ export function App() {
       <Route path="/signup" element={<SignupPage />} />
       <Route path="/settings" element={<Settings />} />
       <Route path="/saved" element={<SavedList />} />
+      <Route path="/messages" element={<Inbox />} />
+      <Route path="/messages/:id" element={<Conversation />} />
+      <Route path="/events" element={<Events />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
@@ -460,7 +465,17 @@ function Match() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const sendChatMessage = useCallback((text: string) => {
+  const sendChatMessage = useCallback(async (text: string) => {
+    // Best-effort text moderation. If OpenAI key isn't configured server-side,
+    // this returns flagged:false and we just send normally.
+    try {
+      const mod = await moderateText(text);
+      if (mod.flagged) {
+        setToast('That message was blocked. Keep it kind.');
+        return;
+      }
+    } catch { /* ignore — don't block on moderation errors */ }
+
     sendChat(text);
     setChatLines(prev => [...prev, { from: 'me', text, ts: Date.now() }]);
     setStats(prev => prev ? { ...prev, messagesSent: prev.messagesSent + 1 } : prev);

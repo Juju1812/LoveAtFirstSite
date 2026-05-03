@@ -3,10 +3,16 @@ import http from 'node:http';
 import cors from 'cors';
 import { Server } from 'socket.io';
 import {
+  db,
   recordMatch, recordContact, recordReport,
   createUser, getUserByEmail, getUserById,
   saveUserProfile, getUserProfile,
-  saveConnection, unsaveConnection, listSavedConnections
+  saveConnection, unsaveConnection, listSavedConnections,
+  ensureConversation, sendMessage, listConversations, listMessages,
+  checkParticipant, markConversationRead,
+  getUpcomingEvents, rsvpEvent, unrsvpEvent, getActiveEventForUser,
+  recordCallHistory, getMyHistory,
+  recordContentReport, getOpenReports
 } from './db.js';
 import {
   hashPassword, verifyPassword, signToken,
@@ -133,6 +139,153 @@ app.delete('/api/saved/:userId', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+// ---- Messaging ----
+app.get('/api/conversations', requireAuth, (req, res) => {
+  res.json({ conversations: listConversations(req.userId) });
+});
+
+app.get('/api/conversations/:id/messages', requireAuth, (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'Bad id' });
+  const msgs = listMessages(id, req.userId);
+  if (msgs == null) return res.status(403).json({ error: 'Not your conversation' });
+  res.json({ messages: msgs });
+});
+
+app.post('/api/conversations/:id/messages', requireAuth, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const { body } = req.body ?? {};
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'Bad id' });
+  if (typeof body !== 'string' || !body.trim()) return res.status(400).json({ error: 'Empty message' });
+  if (!checkParticipant(id, req.userId)) return res.status(403).json({ error: 'Not your conversation' });
+  const text = body.trim().slice(0, 1000);
+
+  // Optional moderation pass before persisting
+  const flag = await moderateText(text);
+  if (flag.flagged) {
+    recordContentReport({
+      reporter_user_id: null, reported_user_id: req.userId,
+      kind: 'message-flagged', detail: `Auto: ${flag.categories?.join(',') ?? ''} | ${text.slice(0,200)}`
+    });
+    return res.status(400).json({ error: 'Message blocked by moderation' });
+  }
+
+  const msg = sendMessage(id, req.userId, text);
+  // Notify peer if connected
+  const userSocketIds = userSockets.get(getOtherParticipant(id, req.userId));
+  if (userSocketIds) {
+    for (const sid of userSocketIds) {
+      io.to(sid).emit('message', { conversationId: id, message: msg });
+    }
+  }
+  res.json({ message: msg });
+});
+
+app.post('/api/conversations/:id/read', requireAuth, (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id) || !checkParticipant(id, req.userId)) {
+    return res.status(403).json({ error: 'Not your conversation' });
+  }
+  markConversationRead(id, req.userId);
+  res.json({ ok: true });
+});
+
+// ---- Events ----
+app.get('/api/events', (req, res) => {
+  res.json({ events: getUpcomingEvents(req.userId) });
+});
+
+app.post('/api/events/:id/rsvp', requireAuth, (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'Bad id' });
+  rsvpEvent(id, req.userId);
+  res.json({ ok: true });
+});
+
+app.delete('/api/events/:id/rsvp', requireAuth, (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'Bad id' });
+  unrsvpEvent(id, req.userId);
+  res.json({ ok: true });
+});
+
+// ---- Insights / compatibility data ----
+app.get('/api/insights', requireAuth, (req, res) => {
+  const history = getMyHistory(req.userId);
+  if (history.length === 0) {
+    return res.json({ history: [], summary: null });
+  }
+  const total = history.length;
+  const avg = (key) => Math.round(history.reduce((s, h) => s + (h[key] ?? 50), 0) / total);
+  const matchRate = history.filter(h => h.matched).length / total;
+  const topicCounts = {};
+  const topicChem = {};
+  for (const h of history) {
+    const t = h.topic || 'any';
+    topicCounts[t] = (topicCounts[t] || 0) + 1;
+    topicChem[t] = (topicChem[t] || 0) + (h.avg_chemistry ?? 50);
+  }
+  let bestTopic = null, bestScore = -1;
+  for (const t of Object.keys(topicCounts)) {
+    if (topicCounts[t] >= 2) {
+      const s = topicChem[t] / topicCounts[t];
+      if (s > bestScore) { bestScore = s; bestTopic = t; }
+    }
+  }
+  res.json({
+    history,
+    summary: {
+      total_calls: total,
+      avg_chemistry: avg('avg_chemistry'),
+      avg_peak: avg('peak_chemistry'),
+      match_rate_pct: Math.round(matchRate * 100),
+      best_topic: bestTopic,
+      best_topic_avg: bestScore > 0 ? Math.round(bestScore) : null
+    }
+  });
+});
+
+// ---- Admin ----
+const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+function requireAdmin(req, res, next) {
+  if (!req.userId) return res.status(401).json({ error: 'auth required' });
+  const u = getUserById(req.userId);
+  if (!u || !ADMIN_EMAILS.includes(u.email.toLowerCase())) {
+    return res.status(403).json({ error: 'admin only' });
+  }
+  next();
+}
+app.get('/api/admin/reports', requireAdmin, (_req, res) => {
+  res.json({ reports: getOpenReports() });
+});
+
+// ---- Text moderation ----
+const OPENAI_KEY = process.env.OPENAI_API_KEY;
+async function moderateText(text) {
+  if (!OPENAI_KEY) return { flagged: false };
+  try {
+    const r = await fetch('https://api.openai.com/v1/moderations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_KEY}` },
+      body: JSON.stringify({ model: 'omni-moderation-latest', input: text })
+    });
+    if (!r.ok) return { flagged: false };
+    const body = await r.json();
+    const result = body.results?.[0];
+    if (!result) return { flagged: false };
+    if (!result.flagged) return { flagged: false };
+    const categories = Object.entries(result.categories || {}).filter(([_, v]) => v).map(([k]) => k);
+    return { flagged: true, categories };
+  } catch { return { flagged: false }; }
+}
+
+app.post('/api/moderate-text', async (req, res) => {
+  const { text } = req.body ?? {};
+  if (typeof text !== 'string') return res.status(400).json({ error: 'Bad input' });
+  const out = await moderateText(text);
+  res.json(out);
+});
+
 // ---- AI conversation coach (Claude Haiku) ----
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
 const COACH_RATE_MS = 15_000;
@@ -250,6 +403,18 @@ const io = new Server(server, {
 const queue = [];
 const sessions = new Map();          // sessionId -> session
 const userToSession = new Map();     // socketId -> sessionId
+const userSockets = new Map();       // userId -> Set<socketId>  (for real-time messaging)
+
+function getOtherParticipant(convoId, userId) {
+  // We don't have a fast lookup; rely on the conversation row
+  const row = (function () {
+    try {
+      return db.prepare('SELECT user_a_id, user_b_id FROM conversations WHERE id = ?').get(convoId);
+    } catch { return null; }
+  })();
+  if (!row) return null;
+  return row.user_a_id === userId ? row.user_b_id : row.user_a_id;
+}
 
 // Mutual compatibility check: do their preferences allow each other?
 function compatible(a, b) {
@@ -286,6 +451,8 @@ function pairUp() {
       const b = queue[j];
       const bSock = io.sockets.sockets.get(b.socketId);
       if (!bSock) { queue.splice(j, 1); j--; continue; }
+      // Event-gated: if either side is in an event, both must be in the same event.
+      if ((a.eventId || null) !== (b.eventId || null)) continue;
       // Topic must match (empty string or 'any' counts as wildcard)
       const topicOk =
         !a.topic || !b.topic ||
@@ -341,6 +508,42 @@ function partnerOf(session, socketId) {
 function endSession(sessionId, reason) {
   const session = sessions.get(sessionId);
   if (!session) return;
+
+  // Persist per-user call history for logged-in participants
+  try {
+    const [aUid, bUid] = session.userIds || [null, null];
+    const [aSock, bSock] = session.users;
+    const durationSec = Math.round((Date.now() - session.startedAt) / 1000);
+    if (aUid) {
+      recordCallHistory({
+        user_id: aUid, peer_user_id: bUid,
+        topic: session.topic,
+        peak_chemistry: session.peakChemistry ?? session.chemistry,
+        avg_chemistry: session.avgChemistry ?? session.chemistry,
+        final_chemistry: session.chemistry,
+        you_swiped: session.swipes[aSock] ?? null,
+        peer_swiped: session.swipes[bSock] ?? null,
+        matched: session.matched,
+        duration_sec: durationSec,
+        ended_at: Date.now()
+      });
+    }
+    if (bUid) {
+      recordCallHistory({
+        user_id: bUid, peer_user_id: aUid,
+        topic: session.topic,
+        peak_chemistry: session.peakChemistry ?? session.chemistry,
+        avg_chemistry: session.avgChemistry ?? session.chemistry,
+        final_chemistry: session.chemistry,
+        you_swiped: session.swipes[bSock] ?? null,
+        peer_swiped: session.swipes[aSock] ?? null,
+        matched: session.matched,
+        duration_sec: durationSec,
+        ended_at: Date.now()
+      });
+    }
+  } catch (err) { console.warn('history record failed', err); }
+
   for (const uid of session.users) {
     userToSession.delete(uid);
     const sock = io.sockets.sockets.get(uid);
@@ -354,15 +557,18 @@ function endSession(sessionId, reason) {
 
 io.on('connection', (socket) => {
   // Optional auth via socket query: client sends ?token=... so we know the user.
-  // We use it only to record saved-connection identities; matching is anonymous.
   socket.userId = null;
   try {
     const tokenFromQuery = socket.handshake?.auth?.token || socket.handshake?.query?.token;
     if (tokenFromQuery) {
-      // Lazily import verifyToken to avoid circular issues
       import('./auth.js').then(({ verifyToken }) => {
         const uid = verifyToken(tokenFromQuery);
-        if (uid) socket.userId = uid;
+        if (uid) {
+          socket.userId = uid;
+          if (!userSockets.has(uid)) userSockets.set(uid, new Set());
+          userSockets.get(uid).add(socket.id);
+          socket.emit('auth-ready');
+        }
       });
     }
   } catch { /* noop */ }
@@ -382,8 +588,9 @@ io.on('connection', (socket) => {
       age_max: typeof opts.prefs.age_max === 'number' ? opts.prefs.age_max : null
     } : null;
 
-    queue.push({ socketId: socket.id, topic, prefs, userId: socket.userId });
-    socket.emit('queued', { position: queue.length });
+    const eventId = socket.userId ? getActiveEventForUser(socket.userId) : null;
+    queue.push({ socketId: socket.id, topic, prefs, userId: socket.userId, eventId });
+    socket.emit('queued', { position: queue.length, eventId });
     pairUp();
   });
 
@@ -405,6 +612,10 @@ io.on('connection', (socket) => {
     const session = sessions.get(sessionId);
     if (!session || !session.users.includes(socket.id)) return;
     session.chemistry = Math.max(0, Math.min(100, Math.round(score)));
+    session.peakChemistry = Math.max(session.peakChemistry ?? 50, session.chemistry);
+    // Running average via incremental update
+    session.avgSamples = (session.avgSamples ?? 0) + 1;
+    session.avgChemistry = ((session.avgChemistry ?? session.chemistry) * (session.avgSamples - 1) + session.chemistry) / session.avgSamples;
     io.to(session.id).emit('chemistry', { score: session.chemistry });
   });
 
@@ -432,11 +643,15 @@ io.on('connection', (socket) => {
     if (both && !session.matched) {
       session.matched = true;
       session.matchDbId = recordMatch(session.users[0], session.users[1], session.chemistry);
-      // Send each side the OTHER user's userId (for save-connection feature)
       const [aSocket, bSocket] = session.users;
       const [aUid, bUid] = session.userIds || [null, null];
-      io.to(aSocket).emit('matched', { matchId: session.matchDbId, chemistry: session.chemistry, peerUserId: bUid });
-      io.to(bSocket).emit('matched', { matchId: session.matchDbId, chemistry: session.chemistry, peerUserId: aUid });
+      // Auto-create conversation when both users are signed in
+      let convoId = null;
+      if (aUid && bUid) {
+        try { convoId = ensureConversation(aUid, bUid); } catch { /* noop */ }
+      }
+      io.to(aSocket).emit('matched', { matchId: session.matchDbId, chemistry: session.chemistry, peerUserId: bUid, conversationId: convoId });
+      io.to(bSocket).emit('matched', { matchId: session.matchDbId, chemistry: session.chemistry, peerUserId: aUid, conversationId: convoId });
     }
   });
 
@@ -470,12 +685,31 @@ io.on('connection', (socket) => {
     if (!session || !session.users.includes(socket.id)) return;
     const peer = partnerOf(session, socket.id);
     recordReport(socket.id, peer, reason);
+    // Also record in admin moderation queue with user IDs if available
+    const idxA = session.users[0] === socket.id ? 0 : 1;
+    const idxB = 1 - idxA;
+    recordContentReport({
+      reporter_user_id: session.userIds?.[idxA] ?? null,
+      reported_user_id: session.userIds?.[idxB] ?? null,
+      reporter_socket: socket.id,
+      reported_socket: peer,
+      kind: 'user',
+      detail: typeof reason === 'string' ? reason.slice(0, 500) : null
+    });
     endSession(session.id, 'reported');
   });
 
   socket.on('disconnect', () => {
     const idx = queue.findIndex(q => q.socketId === socket.id);
     if (idx !== -1) queue.splice(idx, 1);
+
+    if (socket.userId) {
+      const set = userSockets.get(socket.userId);
+      if (set) {
+        set.delete(socket.id);
+        if (set.size === 0) userSockets.delete(socket.userId);
+      }
+    }
 
     const sessionId = userToSession.get(socket.id);
     if (sessionId) {
