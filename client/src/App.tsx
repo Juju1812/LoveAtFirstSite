@@ -522,6 +522,10 @@ function Match() {
   return (
     <div className="app">
       <header className="topbar">
+        <button className="topbar-back" onClick={leaveMatch} title="End call and go back to homepage">
+          <span className="topbar-back-arrow">←</span>
+          <span className="topbar-back-label">Back</span>
+        </button>
         <div className="brand-group">
           <div className="brand">Glimpse</div>
           {speechSupported && (
@@ -535,6 +539,9 @@ function Match() {
         </div>
         <ChemistryMeter score={chemistry} />
         <Timer secondsLeft={secondsLeft} />
+        <button className="topbar-report" onClick={report} title="Report this user">
+          🚩
+        </button>
       </header>
 
       <main className="main">
@@ -559,7 +566,6 @@ function Match() {
           onSwipeLeft={swipeLeft}
           onSwipeRight={swipeRight}
           onNext={next}
-          onReport={report}
         />
       </footer>
 

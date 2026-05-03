@@ -5,43 +5,44 @@ interface Props {
   onSwipeLeft: () => void;
   onSwipeRight: () => void;
   onNext: () => void;
-  onReport: () => void;
 }
 
 export function Controls({
   unlocked, swiped, peerLikedYou,
-  onSwipeLeft, onSwipeRight, onNext, onReport
+  onSwipeLeft, onSwipeRight, onNext
 }: Props) {
+  const swipeDisabled = !unlocked || !!swiped;
   return (
     <div className="controls">
-      <button className="ctrl ctrl-secondary" onClick={onReport} title="Report user">
-        🚩
-      </button>
-
       <button
-        className="ctrl ctrl-nope"
+        className="ctrl ctrl-pass"
         onClick={onSwipeLeft}
-        disabled={!unlocked || !!swiped}
-        aria-label="Swipe left"
+        disabled={swipeDisabled}
+        aria-label="Pass on this person"
+        title={unlocked ? 'Pass — find someone new' : 'Locked until timer ends'}
       >
-        ✕
+        <span className="ctrl-icon">✕</span>
+        <span className="ctrl-label">Pass</span>
       </button>
 
-      <button className="ctrl ctrl-next" onClick={onNext} title="Next person">
-        Next ⏭
+      <button className="ctrl ctrl-next" onClick={onNext} title="Skip to next person">
+        <span className="ctrl-icon">⏭</span>
+        <span className="ctrl-label">Next</span>
       </button>
 
       <button
         className="ctrl ctrl-like"
         onClick={onSwipeRight}
-        disabled={!unlocked || !!swiped}
-        aria-label="Swipe right"
+        disabled={swipeDisabled}
+        aria-label="Like this person"
+        title={unlocked ? 'Like — both right = match' : 'Locked until timer ends'}
       >
-        ♥
+        <span className="ctrl-icon">♥</span>
+        <span className="ctrl-label">Like</span>
       </button>
 
       {peerLikedYou && unlocked && !swiped && (
-        <div className="hint-bubble">They swiped right on you 👀</div>
+        <div className="hint-bubble">They liked you 👀</div>
       )}
       {swiped === 'right' && (
         <div className="hint-bubble waiting">You liked them — waiting…</div>
