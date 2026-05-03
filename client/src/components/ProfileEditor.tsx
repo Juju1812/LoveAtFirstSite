@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { type Profile, resizePhoto, clearProfile } from '../profile';
+import { type Profile, resizePhoto, clearProfile, getProfilePhotos, MAX_PHOTOS } from '../profile';
 
 interface Props {
   initial: Profile | null;
@@ -13,11 +13,11 @@ export function ProfileEditor({ initial, onSave, onCancel }: Props) {
   const [bio, setBio] = useState(initial?.bio ?? '');
   const [vibes, setVibes] = useState(initial?.vibes ?? '');
   const [contact, setContact] = useState(initial?.contact ?? '');
-  const [photo, setPhoto] = useState<string | undefined>(initial?.photo);
+  const [photos, setPhotos] = useState<string[]>(getProfilePhotos(initial));
   const [error, setError] = useState<string | null>(null);
   const [resizing, setResizing] = useState(false);
 
-  async function handlePhoto(file: File) {
+  async function handlePhoto(file: File, slotIdx?: number) {
     setError(null);
     if (!file.type.startsWith('image/')) {
       setError('Please pick an image file.');
@@ -26,12 +26,34 @@ export function ProfileEditor({ initial, onSave, onCancel }: Props) {
     setResizing(true);
     try {
       const dataUrl = await resizePhoto(file);
-      setPhoto(dataUrl);
+      setPhotos(prev => {
+        const next = [...prev];
+        if (slotIdx !== undefined && slotIdx < next.length) {
+          next[slotIdx] = dataUrl;
+        } else if (next.length < MAX_PHOTOS) {
+          next.push(dataUrl);
+        }
+        return next;
+      });
     } catch (e) {
       setError("Couldn't process that image. Try a different one.");
     } finally {
       setResizing(false);
     }
+  }
+
+  function removePhoto(idx: number) {
+    setPhotos(prev => prev.filter((_, i) => i !== idx));
+  }
+
+  function movePhoto(idx: number, direction: -1 | 1) {
+    setPhotos(prev => {
+      const next = [...prev];
+      const target = idx + direction;
+      if (target < 0 || target >= next.length) return next;
+      [next[idx], next[target]] = [next[target], next[idx]];
+      return next;
+    });
   }
 
   function handleSubmit(e: React.FormEvent) {
@@ -47,7 +69,8 @@ export function ProfileEditor({ initial, onSave, onCancel }: Props) {
       bio: bio.trim() || undefined,
       vibes: vibes.trim() || undefined,
       contact: contact.trim() || undefined,
-      photo
+      photos: photos.length > 0 ? photos : undefined,
+      photo: photos[0] // back-compat
     };
     onSave(profile);
   }
@@ -55,8 +78,14 @@ export function ProfileEditor({ initial, onSave, onCancel }: Props) {
   function handleClear() {
     if (!confirm('Delete your saved profile?')) return;
     clearProfile();
-    setName(''); setAge(''); setBio(''); setVibes(''); setContact(''); setPhoto(undefined);
+    setName(''); setAge(''); setBio(''); setVibes(''); setContact(''); setPhotos([]);
   }
+
+  // Build the slot grid: filled slots + one "+" empty slot if there's room
+  const slots: Array<{ kind: 'photo'; src: string; idx: number } | { kind: 'add' }> = [
+    ...photos.map((src, idx) => ({ kind: 'photo' as const, src, idx })),
+    ...(photos.length < MAX_PHOTOS ? [{ kind: 'add' as const }] : [])
+  ];
 
   return (
     <div className="modal-backdrop" onClick={onCancel}>
@@ -65,29 +94,50 @@ export function ProfileEditor({ initial, onSave, onCancel }: Props) {
 
         <div className="modal-header">
           <h2>Your profile</h2>
-          <p>Optional. Only shown to people you match with — not before, never to anyone else. Stored on this device.</p>
+          <p>Optional. Only shown to people you match with — not before, never to anyone else. First photo is your primary.</p>
         </div>
 
         <form className="profile-form" onSubmit={handleSubmit}>
-          <div className="profile-photo-row">
-            <div className="profile-photo-preview" aria-label="Profile photo preview">
-              {photo ? <img src={photo} alt="profile" /> : <span className="profile-photo-placeholder">📷</span>}
+          <div className="photo-grid-section">
+            <label className="photo-grid-label">
+              Photos <span className="photo-grid-count">{photos.length}/{MAX_PHOTOS}</span>
+            </label>
+            <div className="photo-grid">
+              {slots.map((slot, i) => {
+                if (slot.kind === 'add') {
+                  return (
+                    <label key="add" className="photo-slot photo-slot-add" title="Add photo">
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => e.target.files?.[0] && handlePhoto(e.target.files[0])}
+                        hidden
+                      />
+                      <span className="photo-slot-add-icon">+</span>
+                      <span className="photo-slot-add-label">{resizing ? 'Processing…' : 'Add photo'}</span>
+                    </label>
+                  );
+                }
+                const isPrimary = slot.idx === 0;
+                return (
+                  <div key={slot.idx} className={`photo-slot ${isPrimary ? 'photo-slot-primary' : ''}`}>
+                    <img src={slot.src} alt={`Photo ${slot.idx + 1}`} />
+                    {isPrimary && <span className="photo-slot-badge">Primary</span>}
+                    <div className="photo-slot-actions">
+                      {slot.idx > 0 && (
+                        <button type="button" className="photo-slot-action" onClick={() => movePhoto(slot.idx, -1)} title="Move up">↑</button>
+                      )}
+                      {slot.idx < photos.length - 1 && (
+                        <button type="button" className="photo-slot-action" onClick={() => movePhoto(slot.idx, 1)} title="Move down">↓</button>
+                      )}
+                      <button type="button" className="photo-slot-remove" onClick={() => removePhoto(slot.idx)} title="Remove">✕</button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
-            <div className="profile-photo-controls">
-              <label className="profile-photo-btn">
-                {resizing ? 'Processing…' : photo ? 'Change photo' : 'Add a photo'}
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={(e) => e.target.files?.[0] && handlePhoto(e.target.files[0])}
-                  hidden
-                />
-              </label>
-              {photo && (
-                <button type="button" className="profile-photo-remove" onClick={() => setPhoto(undefined)}>
-                  Remove
-                </button>
-              )}
+            <div className="photo-grid-hint">
+              Drag the order with the arrows. The first photo is what people see in their match alerts and inbox.
             </div>
           </div>
 

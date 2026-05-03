@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
 import { ProfileEditor } from './ProfileEditor';
-import { type Profile } from '../profile';
+import { type Profile, getProfilePhotos } from '../profile';
 
 export function ProfilePage() {
   const { user, profile, setProfile } = useAuth();
@@ -33,27 +33,46 @@ export function ProfilePage() {
         </div>
       )}
 
-      <div className="profile-card-large">
-        <div className="profile-card-photo-wrap">
-          {profile?.photo ? (
-            <img src={profile.photo} alt="" className="profile-card-photo-large" />
-          ) : (
-            <div className="profile-card-photo-large profile-card-photo-empty-large">👤</div>
-          )}
-        </div>
-        <div className="profile-card-large-meta">
-          <h2>
-            {profile?.name || <em className="muted">No name yet</em>}
-            {profile?.age ? <span className="profile-card-age">, {profile.age}</span> : null}
-          </h2>
-          <p className="profile-card-bio-large">{profile?.bio || <em className="muted">No bio yet.</em>}</p>
-          {profile?.vibes && <p className="profile-card-vibes-large">✨ {profile.vibes}</p>}
-          {profile?.contact && <p className="profile-card-contact-large">📬 {profile.contact}</p>}
-        </div>
-        <button className="settings-save-btn" onClick={() => setEditing(true)}>
-          {profile?.name || profile?.bio ? 'Edit profile' : 'Create profile'}
-        </button>
-      </div>
+      {(() => {
+        const photos = getProfilePhotos(profile);
+        return (
+          <>
+            {photos.length > 0 ? (
+              <div className="profile-photos-grid">
+                {photos.map((src, i) => (
+                  <div
+                    key={i}
+                    className={`profile-photos-tile ${i === 0 ? 'profile-photos-tile-primary' : ''}`}
+                  >
+                    <img src={src} alt={`Profile photo ${i + 1}`} />
+                    {i === 0 && <span className="profile-photos-primary-badge">Primary</span>}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="profile-photos-empty">
+                <div className="profile-photos-empty-icon">📷</div>
+                <p>No photos yet — add some so matches can see who they're talking to.</p>
+              </div>
+            )}
+
+            <div className="profile-card-large profile-card-large-no-photo">
+              <div className="profile-card-large-meta">
+                <h2>
+                  {profile?.name || <em className="muted">No name yet</em>}
+                  {profile?.age ? <span className="profile-card-age">, {profile.age}</span> : null}
+                </h2>
+                <p className="profile-card-bio-large">{profile?.bio || <em className="muted">No bio yet.</em>}</p>
+                {profile?.vibes && <p className="profile-card-vibes-large">✨ {profile.vibes}</p>}
+                {profile?.contact && <p className="profile-card-contact-large">📬 {profile.contact}</p>}
+              </div>
+              <button className="settings-save-btn" onClick={() => setEditing(true)}>
+                {profile?.name || profile?.bio || photos.length > 0 ? 'Edit profile' : 'Create profile'}
+              </button>
+            </div>
+          </>
+        );
+      })()}
 
       {editing && (
         <ProfileEditor

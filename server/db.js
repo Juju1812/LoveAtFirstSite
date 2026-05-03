@@ -178,7 +178,8 @@ const newCols = [
   ['looking_for', 'TEXT'],
   ['age_min', 'INTEGER'],
   ['age_max', 'INTEGER'],
-  ['verified', 'INTEGER DEFAULT 0']
+  ['verified', 'INTEGER DEFAULT 0'],
+  ['photos', 'TEXT'] // JSON-encoded array of data URLs
 ];
 for (const [name, type] of newCols) {
   if (!existingCols.includes(name)) {
@@ -290,9 +291,9 @@ export function isUserPremium(userId) {
 // ---- User profiles ----
 const upsertProfile = db.prepare(`
   INSERT INTO user_profiles
-    (user_id, name, age, bio, vibes, contact, photo, gender, looking_for, age_min, age_max, updated_at)
+    (user_id, name, age, bio, vibes, contact, photo, photos, gender, looking_for, age_min, age_max, updated_at)
   VALUES
-    (@user_id, @name, @age, @bio, @vibes, @contact, @photo, @gender, @looking_for, @age_min, @age_max, @updated_at)
+    (@user_id, @name, @age, @bio, @vibes, @contact, @photo, @photos, @gender, @looking_for, @age_min, @age_max, @updated_at)
   ON CONFLICT(user_id) DO UPDATE SET
     name = excluded.name,
     age = excluded.age,
@@ -300,6 +301,7 @@ const upsertProfile = db.prepare(`
     vibes = excluded.vibes,
     contact = excluded.contact,
     photo = excluded.photo,
+    photos = excluded.photos,
     gender = excluded.gender,
     looking_for = excluded.looking_for,
     age_min = excluded.age_min,
@@ -307,7 +309,7 @@ const upsertProfile = db.prepare(`
     updated_at = excluded.updated_at
 `);
 const selectProfile = db.prepare(`
-  SELECT name, age, bio, vibes, contact, photo, gender, looking_for, age_min, age_max, verified, updated_at
+  SELECT name, age, bio, vibes, contact, photo, photos, gender, looking_for, age_min, age_max, verified, updated_at
   FROM user_profiles WHERE user_id = ?
 `);
 
@@ -320,6 +322,7 @@ export function saveUserProfile(userId, p) {
     vibes: p.vibes ?? null,
     contact: p.contact ?? null,
     photo: p.photo ?? null,
+    photos: p.photos ? JSON.stringify(p.photos) : null,
     gender: p.gender ?? null,
     looking_for: p.looking_for ?? null,
     age_min: p.age_min ?? null,
@@ -329,7 +332,15 @@ export function saveUserProfile(userId, p) {
 }
 
 export function getUserProfile(userId) {
-  return selectProfile.get(userId) || null;
+  const row = selectProfile.get(userId);
+  if (!row) return null;
+  // Deserialize photos JSON. Fall back to single-photo backward compat.
+  let photos = null;
+  if (row.photos) {
+    try { photos = JSON.parse(row.photos); } catch { photos = null; }
+  }
+  if (!photos && row.photo) photos = [row.photo];
+  return { ...row, photos: photos ?? [] };
 }
 
 // ---- Saved connections ----

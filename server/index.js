@@ -97,7 +97,7 @@ app.post('/api/billing/webhook', express.raw({ type: 'application/json' }), asyn
   }
 });
 
-app.use(express.json({ limit: '600kb' })); // photos as base64 can be ~400KB
+app.use(express.json({ limit: '4mb' })); // up to ~6 photos at ~400KB each
 app.use(authMiddleware);
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
@@ -257,14 +257,29 @@ app.put('/api/profile', requireAuth, (req, res) => {
     typeof v === 'number' && v >= 13 && v <= 120 ? Math.floor(v) : null;
   const gender = validGenders.includes(p.gender) ? p.gender : null;
 
+  // Validate photos array (up to 6 data URLs, each <400KB raw)
+  let photos = null;
+  if (Array.isArray(p.photos)) {
+    photos = p.photos
+      .filter(x => typeof x === 'string' && x.startsWith('data:image/') && x.length < 400_000)
+      .slice(0, 6);
+    if (photos.length === 0) photos = null;
+  }
+  // Backward-compat: if only `photo` was sent, treat as photos[0]
+  const legacyPhoto = typeof p.photo === 'string' && p.photo.startsWith('data:image/') && p.photo.length < 400_000
+    ? p.photo : null;
+  if (!photos && legacyPhoto) photos = [legacyPhoto];
+  // First photo always populates the legacy `photo` column for fast reads
+  const primaryPhoto = photos?.[0] ?? legacyPhoto ?? null;
+
   const safe = {
     name: typeof p.name === 'string' ? p.name.slice(0, 60).trim() || null : null,
     age: ageInt(p.age),
     bio: typeof p.bio === 'string' ? p.bio.slice(0, 400).trim() || null : null,
     vibes: typeof p.vibes === 'string' ? p.vibes.slice(0, 200).trim() || null : null,
     contact: typeof p.contact === 'string' ? p.contact.slice(0, 200).trim() || null : null,
-    photo: typeof p.photo === 'string' && p.photo.startsWith('data:image/') && p.photo.length < 400_000
-      ? p.photo : null,
+    photo: primaryPhoto,
+    photos,
     gender,
     looking_for: validLF(p.looking_for),
     age_min: ageInt(p.age_min),

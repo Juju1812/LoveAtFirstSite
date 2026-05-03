@@ -15,13 +15,30 @@ export interface Profile {
   bio?: string;
   vibes?: string;        // free-form interests / emojis
   contact?: string;      // optional fallback contact (IG, phone, email)
-  photo?: string;        // base64 data URL, resized client-side
+  photo?: string;        // legacy: kept in sync with photos[0] for back-compat
+  photos?: string[];     // 1-6 photos (data URLs, resized client-side)
   gender?: Gender | null;
   looking_for?: string | null; // comma-separated list of LookingFor
   age_min?: number | null;
   age_max?: number | null;
   verified?: boolean;
 }
+
+/** Returns the full list of photos for a profile (handles legacy single-photo). */
+export function getProfilePhotos(p: Profile | null | undefined): string[] {
+  if (!p) return [];
+  if (p.photos && p.photos.length > 0) return p.photos;
+  if (p.photo) return [p.photo];
+  return [];
+}
+
+/** The "primary" photo used in compact views (sidebar, list rows). */
+export function getPrimaryPhoto(p: Profile | null | undefined): string | undefined {
+  const all = getProfilePhotos(p);
+  return all[0];
+}
+
+export const MAX_PHOTOS = 6;
 
 export const TOPICS: Array<{ id: string; label: string; emoji: string; blurb: string }> = [
   { id: 'any', label: 'Anything', emoji: '🎲', blurb: 'No filter — meet whoever shows up.' },
@@ -95,6 +112,12 @@ export function sanitizeIncomingProfile(p: any): Profile | null {
   if (typeof p.contact === 'string') out.contact = p.contact.slice(0, 200).trim() || undefined;
   if (typeof p.photo === 'string' && p.photo.startsWith('data:image/') && p.photo.length < 400_000) {
     out.photo = p.photo;
+  }
+  if (Array.isArray(p.photos)) {
+    const filtered = p.photos
+      .filter((x: any) => typeof x === 'string' && x.startsWith('data:image/') && x.length < 400_000)
+      .slice(0, 6);
+    if (filtered.length > 0) out.photos = filtered;
   }
   return out;
 }
