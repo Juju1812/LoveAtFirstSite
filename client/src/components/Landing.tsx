@@ -160,6 +160,11 @@ function Hero({ onStart, starting, onEditProfile, hasProfile }: {
   );
 }
 
+/** Unsplash CDN URL builder — high quality with on-the-fly sizing. */
+function unsplash(id: string, w = 600, h = 800) {
+  return `https://images.unsplash.com/photo-${id}?w=${w}&h=${h}&fit=crop&crop=faces,center&auto=format&q=85`;
+}
+
 function HeroVisual() {
   return (
     <div className="hero-visual" aria-hidden>
@@ -173,14 +178,14 @@ function HeroVisual() {
           <div className="hero-mock-stage">
             <img
               className="hero-mock-remote-photo"
-              src="https://randomuser.me/api/portraits/women/65.jpg"
+              src={unsplash('1494790108377-be9c29b29330', 700, 950)}
               alt=""
               loading="eager"
             />
             <div className="hero-mock-reaction">❤️</div>
             <img
               className="hero-mock-local-photo"
-              src="https://randomuser.me/api/portraits/men/32.jpg"
+              src={unsplash('1500648767791-00dcc994a43e', 200, 280)}
               alt=""
               loading="eager"
             />
@@ -198,23 +203,23 @@ function HeroVisual() {
 function PreviewGallery() {
   const scenes = [
     {
-      remote: 'https://randomuser.me/api/portraits/men/45.jpg',
-      local: 'https://randomuser.me/api/portraits/women/12.jpg',
+      remote: unsplash('1507003211169-0a1dd7228f2d', 600, 800),
+      local: unsplash('1438761681033-6461ffad8d80', 200, 280),
       chem: 64, time: '1:46', caption: 'You\'re both warming up.',
       reaction: '😂',
       tilt: -4
     },
     {
-      remote: 'https://randomuser.me/api/portraits/women/40.jpg',
-      local: 'https://randomuser.me/api/portraits/men/22.jpg',
+      remote: unsplash('1517841905240-472988babdf9', 700, 950),
+      local: unsplash('1521119989659-a83eee488004', 200, 280),
       chem: 89, time: '0:42', caption: 'Strong spark — keep going.',
       reaction: '🔥',
       tilt: 3,
       featured: true
     },
     {
-      remote: 'https://randomuser.me/api/portraits/men/77.jpg',
-      local: 'https://randomuser.me/api/portraits/women/29.jpg',
+      remote: unsplash('1539571696357-5a69c17a67c6', 600, 800),
+      local: unsplash('1544005313-94ddf0286df2', 200, 280),
       chem: 92, time: 'matched', caption: 'It\'s a match. 💞',
       reaction: '💞',
       tilt: -2,
