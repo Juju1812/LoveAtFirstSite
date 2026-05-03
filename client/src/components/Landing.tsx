@@ -460,6 +460,7 @@ function Footer() {
           <span className="landing-logo-text">Glimpse</span>
         </div>
         <div className="landing-footer-tag">60 seconds. One glimpse. No filter.</div>
+        <div className="landing-footer-credit">Made by Julian Arbib and Claude</div>
         <div className="landing-footer-meta">© {new Date().getFullYear()} Glimpse · glimpse.dating</div>
       </div>
     </footer>

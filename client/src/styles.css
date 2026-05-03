@@ -665,6 +665,12 @@ input {
   font-size: 13px;
   margin-left: 8px;
 }
+.landing-footer-credit {
+  color: #8a8a97;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
 .landing-footer-meta {
   margin-left: auto;
   color: #6a6a77;
