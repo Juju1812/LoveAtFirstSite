@@ -4,9 +4,10 @@ interface Props {
   localStream: MediaStream | null;
   remoteStream: MediaStream | null;
   connecting: boolean;
+  onLocalVideoEl?: (el: HTMLVideoElement | null) => void;
 }
 
-export function VideoStage({ localStream, remoteStream, connecting }: Props) {
+export function VideoStage({ localStream, remoteStream, connecting, onLocalVideoEl }: Props) {
   const remoteRef = useRef<HTMLVideoElement>(null);
   const localRef = useRef<HTMLVideoElement>(null);
 
@@ -16,7 +17,9 @@ export function VideoStage({ localStream, remoteStream, connecting }: Props) {
 
   useEffect(() => {
     if (localRef.current) localRef.current.srcObject = localStream;
-  }, [localStream]);
+    onLocalVideoEl?.(localRef.current);
+    return () => onLocalVideoEl?.(null);
+  }, [localStream, onLocalVideoEl]);
 
   const remoteHasVideo = !!remoteStream && remoteStream.getVideoTracks().length > 0;
 

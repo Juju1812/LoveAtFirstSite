@@ -2,7 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { useWebRTC } from './useWebRTC';
 import { useSpeech } from './useSpeech';
+import { useFaceAnalysis, type FaceFrame } from './useFaceAnalysis';
 import { nextChemistry, scoreText } from './sentiment';
+import { type CallStats, emptyStats } from './callStats';
 import { VideoStage } from './components/VideoStage';
 import { ChemistryMeter } from './components/ChemistryMeter';
 import { Timer } from './components/Timer';
@@ -11,13 +13,14 @@ import { ChatPanel, type ChatLine } from './components/ChatPanel';
 import { MatchedOverlay } from './components/MatchedOverlay';
 import { Landing } from './components/Landing';
 import { ProfileEditor } from './components/ProfileEditor';
+import { ResultsScreen } from './components/ResultsScreen';
 import { type Profile, loadProfile, saveProfile, sanitizeIncomingProfile } from './profile';
 
 const SIGNAL_URL =
   (import.meta.env.VITE_SIGNAL_URL as string | undefined) ??
   (import.meta.env.DEV ? 'http://localhost:3001' : window.location.origin);
 
-type Phase = 'idle' | 'queued' | 'connecting' | 'live' | 'matched';
+type Phase = 'idle' | 'queued' | 'connecting' | 'live' | 'matched' | 'ended';
 type Role = 'initiator' | 'receiver';
 
 interface SessionInfo {
@@ -44,9 +47,16 @@ export function App() {
   const [hasSentContact, setHasSentContact] = useState(false);
   const [showProfileEditor, setShowProfileEditor] = useState(false);
   const [overlayDismissed, setOverlayDismissed] = useState(false);
+  const [stats, setStats] = useState<CallStats | null>(null);
+  const [resultsStats, setResultsStats] = useState<CallStats | null>(null);
+  const [localVideoEl, setLocalVideoEl] = useState<HTMLVideoElement | null>(null);
 
   const myProfileRef = useRef(myProfile);
+  const statsRef = useRef<CallStats | null>(null);
+  const sessionRef = useRef<SessionInfo | null>(null);
   useEffect(() => { myProfileRef.current = myProfile; }, [myProfile]);
+  useEffect(() => { statsRef.current = stats; }, [stats]);
+  useEffect(() => { sessionRef.current = session; }, [session]);
 
   const socketRef = useRef<Socket | null>(null);
   const chemistryRef = useRef(50);
@@ -69,6 +79,8 @@ export function App() {
       setHasSentContact(false);
       setOverlayDismissed(false);
       setChemistry(50);
+      setStats(emptyStats());
+      setResultsStats(null);
       setPhase('connecting');
     });
 
@@ -82,6 +94,7 @@ export function App() {
 
     socket.on('peer-swiped-left', () => {
       setToast("They swiped left 💔");
+      setStats(prev => prev ? { ...prev, outcome: 'rejected-by-them' } : prev);
     });
 
     socket.on('matched', ({ chemistry: c }: { chemistry: number }) => {
@@ -92,6 +105,7 @@ export function App() {
 
     socket.on('peer-left', () => {
       setToast('They disconnected.');
+      setStats(prev => prev ? { ...prev, outcome: 'peer-left' } : prev);
     });
 
     socket.on('peer-contact', ({ contact }: { contact: string }) => {
@@ -99,23 +113,30 @@ export function App() {
     });
 
     socket.on('session-ended', ({ reason }: { reason: string }) => {
-      // Match phase keeps the overlay open; user closes it manually.
-      setSession(prev => {
-        if (phaseRef.current === 'matched') return prev;
-        return null;
+      // 'matched' phase ignores session-ended — user closes the overlay manually.
+      if (phaseRef.current === 'matched') return;
+
+      // Snapshot current stats with finalized outcome and freeze for results.
+      setStats(prev => {
+        if (!prev) return prev;
+        const finalOutcome: CallStats['outcome'] =
+          prev.outcome !== 'ended-other' ? prev.outcome :
+          reason === 'rejected' ? 'rejected-by-them' :
+          reason === 'next' ? 'next' :
+          reason === 'peer-disconnected' ? 'peer-left' :
+          'ended-other';
+        const finalized: CallStats = {
+          ...prev,
+          endedAt: Date.now(),
+          outcome: finalOutcome,
+          finalChemistry: chemistryRef.current
+        };
+        setResultsStats(finalized);
+        return finalized;
       });
-      if (phaseRef.current !== 'matched') {
-        const msg =
-          reason === 'rejected' ? 'No spark — finding someone new…' :
-          reason === 'next' ? 'Skipped. Searching for next…' :
-          reason === 'reported' ? 'Reported. Searching for next…' :
-          reason === 'peer-disconnected' ? 'They left. Searching for next…' :
-          'Searching for next…';
-        setToast(msg);
-        // Auto-requeue.
-        setPhase('queued');
-        socket.emit('join-queue');
-      }
+
+      setSession(null);
+      setPhase('ended');
     });
 
     return () => {
@@ -135,18 +156,48 @@ export function App() {
     return () => clearTimeout(id);
   }, [toast]);
 
+  // ---- Chemistry update helper (server is source of truth, we also track history) ----
+  const applyChemistryDelta = useCallback((newScore: number) => {
+    chemistryRef.current = newScore;
+    setChemistry(newScore);
+    socketRef.current?.emit('chemistry-update', {
+      sessionId: sessionRef.current?.sessionId,
+      score: newScore
+    });
+    setStats(prev => {
+      if (!prev) return prev;
+      const ts = Date.now();
+      const last = prev.chemistryHistory[prev.chemistryHistory.length - 1];
+      // Throttle: only push a new point every ~500ms
+      const history = (last && ts - last.t < 500)
+        ? prev.chemistryHistory
+        : [...prev.chemistryHistory, { t: ts, score: newScore }];
+      const peak = Math.max(prev.peakChemistry, newScore);
+      const totalDuration = history.length > 1 ? history[history.length - 1].t - history[0].t : 0;
+      // Time-weighted average via trapezoidal integration
+      let area = 0;
+      for (let i = 1; i < history.length; i++) {
+        const dt = history[i].t - history[i - 1].t;
+        area += ((history[i].score + history[i - 1].score) / 2) * dt;
+      }
+      const avg = totalDuration > 0 ? area / totalDuration : newScore;
+      return {
+        ...prev,
+        chemistryHistory: history,
+        peakChemistry: peak,
+        avgChemistry: avg,
+        finalChemistry: newScore
+      };
+    });
+  }, []);
+
   // ---- WebRTC ----
   const onChatMessage = useCallback((text: string) => {
     setChatLines(prev => [...prev, { from: 'them', text, ts: Date.now() }]);
+    setStats(prev => prev ? { ...prev, messagesReceived: prev.messagesReceived + 1 } : prev);
     const s = scoreText(text);
-    const next = nextChemistry(chemistryRef.current, s);
-    chemistryRef.current = next;
-    setChemistry(next);
-    socketRef.current?.emit('chemistry-update', {
-      sessionId: session?.sessionId,
-      score: next
-    });
-  }, [session?.sessionId]);
+    applyChemistryDelta(nextChemistry(chemistryRef.current, s));
+  }, [applyChemistryDelta]);
 
   const onProfileReceived = useCallback((raw: unknown) => {
     const sanitized = sanitizeIncomingProfile(raw);
@@ -166,20 +217,65 @@ export function App() {
   // spoken conversation, not just typed messages. Transcripts stay client-side;
   // only the numeric score is broadcast.
   const onSpokenTranscript = useCallback((text: string) => {
+    setStats(prev => prev ? { ...prev, spokenChunks: prev.spokenChunks + 1 } : prev);
     const s = scoreText(text);
     if (s === 0) return; // skip neutral chunks to reduce noise
-    const next = nextChemistry(chemistryRef.current, s);
-    chemistryRef.current = next;
-    setChemistry(next);
-    socketRef.current?.emit('chemistry-update', {
-      sessionId: session?.sessionId,
-      score: next
-    });
-  }, [session?.sessionId]);
+    applyChemistryDelta(nextChemistry(chemistryRef.current, s));
+  }, [applyChemistryDelta]);
 
   const { supported: speechSupported, listening } = useSpeech({
     active: phase === 'live' || phase === 'matched',
     onTranscript: onSpokenTranscript
+  });
+
+  // Face analysis — runs locally on your own video. Updates stats every frame
+  // and nudges the chemistry meter at 1Hz from accumulated face signal.
+  const lastFaceTickRef = useRef(0);
+  const faceWindowRef = useRef<FaceFrame[]>([]);
+  const onFaceFrame = useCallback((f: FaceFrame) => {
+    setStats(prev => {
+      if (!prev) return prev;
+      const next: CallStats = {
+        ...prev,
+        totalFaceSamples: prev.totalFaceSamples + 1,
+        faceFrames: prev.faceFrames + (f.hasFace ? 1 : 0),
+        smileFrames: prev.smileFrames + (f.hasFace && f.smile > 0.35 ? 1 : 0),
+        attentionFrames: prev.attentionFrames + (f.hasFace && f.attention > 0.65 ? 1 : 0),
+        surpriseFrames: prev.surpriseFrames + (f.hasFace && f.surprise > 0.35 ? 1 : 0)
+      };
+      return next;
+    });
+
+    if (f.hasFace) faceWindowRef.current.push(f);
+
+    // Once per second, average the recent window into a chemistry signal.
+    const now = Date.now();
+    if (now - lastFaceTickRef.current < 1000) return;
+    lastFaceTickRef.current = now;
+    const w = faceWindowRef.current;
+    if (w.length === 0) return;
+    const avgSmile = w.reduce((a, x) => a + x.smile, 0) / w.length;
+    const avgAttention = w.reduce((a, x) => a + x.attention, 0) / w.length;
+    const avgSurprise = w.reduce((a, x) => a + x.surprise, 0) / w.length;
+    faceWindowRef.current = [];
+
+    // Build a per-second sentiment-equivalent signal in [-1, 1]
+    let signal = 0;
+    if (avgSmile > 0.45) signal += 0.55;
+    else if (avgSmile > 0.25) signal += 0.25;
+    if (avgSurprise > 0.4) signal += 0.25; // engaged reaction
+    if (avgAttention > 0.7) signal += 0.15;
+    else if (avgAttention < 0.35) signal -= 0.2;
+    signal = Math.max(-1, Math.min(1, signal));
+
+    if (Math.abs(signal) < 0.1) return; // ignore tiny signals
+    applyChemistryDelta(nextChemistry(chemistryRef.current, signal));
+  }, [applyChemistryDelta]);
+
+  const { ready: faceReady } = useFaceAnalysis({
+    active: phase === 'live' || phase === 'matched',
+    videoEl: localVideoEl,
+    onFrame: onFaceFrame
   });
 
   // When we transition to 'matched', send our profile to the peer.
@@ -228,19 +324,15 @@ export function App() {
   const sendChatMessage = useCallback((text: string) => {
     sendChat(text);
     setChatLines(prev => [...prev, { from: 'me', text, ts: Date.now() }]);
+    setStats(prev => prev ? { ...prev, messagesSent: prev.messagesSent + 1 } : prev);
     const s = scoreText(text);
-    const next = nextChemistry(chemistryRef.current, s);
-    chemistryRef.current = next;
-    setChemistry(next);
-    socketRef.current?.emit('chemistry-update', {
-      sessionId: session?.sessionId,
-      score: next
-    });
-  }, [sendChat, session?.sessionId]);
+    applyChemistryDelta(nextChemistry(chemistryRef.current, s));
+  }, [sendChat, applyChemistryDelta]);
 
   const swipeLeft = useCallback(() => {
     if (!session) return;
     setSwiped('left');
+    setStats(prev => prev ? { ...prev, outcome: 'you-rejected' } : prev);
     socketRef.current?.emit('swipe', { sessionId: session.sessionId, direction: 'left' });
   }, [session]);
 
@@ -252,6 +344,7 @@ export function App() {
 
   const next = useCallback(() => {
     if (!session) return;
+    setStats(prev => prev ? { ...prev, outcome: 'next' } : prev);
     socketRef.current?.emit('next', { sessionId: session.sessionId });
   }, [session]);
 
@@ -290,6 +383,27 @@ export function App() {
     setOverlayDismissed(true);
   }, []);
 
+  const goAgain = useCallback(() => {
+    setResultsStats(null);
+    setStats(null);
+    setPhase('queued');
+    socketRef.current?.emit('join-queue');
+  }, []);
+
+  const doneFromResults = useCallback(() => {
+    setResultsStats(null);
+    setStats(null);
+    setPhase('idle');
+    setSession(null);
+    setPeerContact(null);
+    setPeerProfile(null);
+    setChatLines([]);
+    setSwiped(null);
+    setPeerLikedYou(false);
+    setHasSentContact(false);
+    stopAll();
+  }, [stopAll]);
+
   // ---- Timer math ----
   const secondsLeft = useMemo(() => {
     if (!session || phase !== 'live') return session?.timerSeconds ?? 120;
@@ -300,6 +414,16 @@ export function App() {
   const unlocked = phase === 'live' && secondsLeft <= 0;
 
   // ---- Render ----
+  if (phase === 'ended' && resultsStats) {
+    return (
+      <ResultsScreen
+        stats={resultsStats}
+        onGoAgain={goAgain}
+        onDone={doneFromResults}
+      />
+    );
+  }
+
   if (phase === 'idle') {
     return (
       <>
@@ -345,6 +469,7 @@ export function App() {
           localStream={localStream}
           remoteStream={remoteStream}
           connecting={phase === 'connecting' || phase === 'queued'}
+          onLocalVideoEl={setLocalVideoEl}
         />
         <ChatPanel
           lines={chatLines}
