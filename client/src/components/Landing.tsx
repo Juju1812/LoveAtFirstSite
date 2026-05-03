@@ -1,5 +1,7 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import type { Profile } from '../profile';
+import type { User } from '../api';
 import { hasMeaningfulProfile } from '../profile';
 
 interface LandingProps {
@@ -9,9 +11,11 @@ interface LandingProps {
   onDismissError: () => void;
   onEditProfile: () => void;
   profile: Profile | null;
+  user: User | null;
+  onLogout: () => void;
 }
 
-export function Landing({ onStart, starting, mediaError, onDismissError, onEditProfile, profile }: LandingProps) {
+export function Landing({ onStart, starting, mediaError, onDismissError, onEditProfile, profile, user, onLogout }: LandingProps) {
   if (mediaError) {
     const copy = {
       denied: {
@@ -43,7 +47,7 @@ export function Landing({ onStart, starting, mediaError, onDismissError, onEditP
 
   return (
     <div className="landing">
-      <Nav onStart={onStart} starting={starting} onEditProfile={onEditProfile} profile={profile} />
+      <Nav onStart={onStart} starting={starting} onEditProfile={onEditProfile} profile={profile} user={user} onLogout={onLogout} />
       <Hero onStart={onStart} starting={starting} onEditProfile={onEditProfile} hasProfile={hasMeaningfulProfile(profile)} />
       <HowItWorks />
       <WhyGlimpse />
@@ -55,16 +59,18 @@ export function Landing({ onStart, starting, mediaError, onDismissError, onEditP
   );
 }
 
-function Nav({ onStart, starting, onEditProfile, profile }: {
+function Nav({ onStart, starting, onEditProfile, profile, user, onLogout }: {
   onStart: () => void;
   starting: boolean;
   onEditProfile: () => void;
   profile: Profile | null;
+  user: User | null;
+  onLogout: () => void;
 }) {
+  const [menuOpen, setMenuOpen] = useState(false);
   const scrollTo = (id: string) => {
     document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
-  const profileLabel = hasMeaningfulProfile(profile) ? 'Edit profile' : 'Create profile';
   return (
     <nav className="landing-nav">
       <div className="landing-nav-inner">
@@ -78,14 +84,33 @@ function Nav({ onStart, starting, onEditProfile, profile }: {
           <button onClick={() => scrollTo('safety')}>Safety</button>
           <button onClick={() => scrollTo('faq')}>FAQ</button>
         </div>
-        <button className="nav-profile" onClick={onEditProfile}>
-          {profile?.photo ? (
-            <img className="nav-profile-pic" src={profile.photo} alt="profile" />
-          ) : (
-            <span className="nav-profile-icon">👤</span>
-          )}
-          <span className="nav-profile-label">{profileLabel}</span>
-        </button>
+
+        {user ? (
+          <div className="nav-user">
+            <button className="nav-profile" onClick={() => setMenuOpen(o => !o)}>
+              {profile?.photo ? (
+                <img className="nav-profile-pic" src={profile.photo} alt="profile" />
+              ) : (
+                <span className="nav-profile-icon">👤</span>
+              )}
+              <span className="nav-profile-label">{user.email}</span>
+            </button>
+            {menuOpen && (
+              <div className="nav-menu">
+                <button onClick={() => { setMenuOpen(false); onEditProfile(); }}>
+                  {hasMeaningfulProfile(profile) ? 'Edit profile' : 'Create profile'}
+                </button>
+                <button onClick={() => { setMenuOpen(false); onLogout(); }}>Sign out</button>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="nav-auth-links">
+            <Link to="/login" className="nav-link-text">Sign in</Link>
+            <Link to="/signup" className="nav-link-text nav-link-strong">Sign up</Link>
+          </div>
+        )}
+
         <button className="cta-pill" onClick={onStart} disabled={starting}>
           {starting ? 'Starting…' : 'Start'}
         </button>

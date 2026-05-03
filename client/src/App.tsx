@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Routes, Route, useNavigate } from 'react-router-dom';
 import { io, Socket } from 'socket.io-client';
 import { useWebRTC } from './useWebRTC';
 import { useSpeech } from './useSpeech';
@@ -14,7 +15,9 @@ import { MatchedOverlay } from './components/MatchedOverlay';
 import { Landing } from './components/Landing';
 import { ProfileEditor } from './components/ProfileEditor';
 import { ResultsScreen } from './components/ResultsScreen';
-import { type Profile, loadProfile, saveProfile, sanitizeIncomingProfile } from './profile';
+import { LoginPage, SignupPage } from './components/AuthPages';
+import { type Profile, sanitizeIncomingProfile } from './profile';
+import { useAuth } from './AuthContext';
 
 const SIGNAL_URL =
   (import.meta.env.VITE_SIGNAL_URL as string | undefined) ??
@@ -31,6 +34,53 @@ interface SessionInfo {
 }
 
 export function App() {
+  return (
+    <Routes>
+      <Route path="/" element={<HomePage />} />
+      <Route path="/match" element={<Match />} />
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/signup" element={<SignupPage />} />
+      <Route path="*" element={<HomePage />} />
+    </Routes>
+  );
+}
+
+function HomePage() {
+  const navigate = useNavigate();
+  const { user, profile, setProfile, logout } = useAuth();
+  const [showProfileEditor, setShowProfileEditor] = useState(false);
+
+  const handleSaveProfile = useCallback(async (p: Profile) => {
+    await setProfile(p);
+    setShowProfileEditor(false);
+  }, [setProfile]);
+
+  return (
+    <>
+      <Landing
+        onStart={() => navigate('/match')}
+        starting={false}
+        mediaError={null}
+        onDismissError={() => {}}
+        onEditProfile={() => setShowProfileEditor(true)}
+        profile={profile}
+        user={user}
+        onLogout={logout}
+      />
+      {showProfileEditor && (
+        <ProfileEditor
+          initial={profile}
+          onSave={handleSaveProfile}
+          onCancel={() => setShowProfileEditor(false)}
+        />
+      )}
+    </>
+  );
+}
+
+function Match() {
+  const navigate = useNavigate();
+  const { profile: authProfile, setProfile } = useAuth();
   const [phase, setPhase] = useState<Phase>('idle');
   const [session, setSession] = useState<SessionInfo | null>(null);
   const [chemistry, setChemistry] = useState(50);
@@ -42,10 +92,9 @@ export function App() {
   const [toast, setToast] = useState<string | null>(null);
   const [mediaError, setMediaError] = useState<'denied' | 'in-use' | 'unavailable' | null>(null);
   const [starting, setStarting] = useState(false);
-  const [myProfile, setMyProfile] = useState<Profile | null>(() => loadProfile());
+  const myProfile = authProfile;
   const [peerProfile, setPeerProfile] = useState<Profile | null>(null);
   const [hasSentContact, setHasSentContact] = useState(false);
-  const [showProfileEditor, setShowProfileEditor] = useState(false);
   const [overlayDismissed, setOverlayDismissed] = useState(false);
   const [stats, setStats] = useState<CallStats | null>(null);
   const [resultsStats, setResultsStats] = useState<CallStats | null>(null);
@@ -321,6 +370,30 @@ export function App() {
     socketRef.current?.emit('join-queue');
   }, [startMedia]);
 
+  // Auto-start matching when this route mounts.
+  const autoStartedRef = useRef(false);
+  useEffect(() => {
+    if (autoStartedRef.current) return;
+    autoStartedRef.current = true;
+    // Tiny delay so socket is connected first
+    const id = setTimeout(() => { startMatching(); }, 100);
+    return () => clearTimeout(id);
+  }, [startMatching]);
+
+  // Cleanup on unmount: leave queue / end session, stop streams.
+  useEffect(() => {
+    return () => {
+      const sock = socketRef.current;
+      if (sock) {
+        sock.emit('leave-queue');
+        const sId = sessionRef.current?.sessionId;
+        if (sId) sock.emit('next', { sessionId: sId });
+      }
+      stopAll();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const sendChatMessage = useCallback((text: string) => {
     sendChat(text);
     setChatLines(prev => [...prev, { from: 'me', text, ts: Date.now() }]);
@@ -360,12 +433,6 @@ export function App() {
     setHasSentContact(true);
   }, [session]);
 
-  const handleSaveProfile = useCallback((p: Profile) => {
-    saveProfile(p);
-    setMyProfile(p);
-    setShowProfileEditor(false);
-  }, []);
-
   const leaveMatch = useCallback(() => {
     setPhase('idle');
     setSession(null);
@@ -377,7 +444,8 @@ export function App() {
     setHasSentContact(false);
     setOverlayDismissed(false);
     stopAll();
-  }, [stopAll]);
+    navigate('/');
+  }, [stopAll, navigate]);
 
   const continueChatting = useCallback(() => {
     setOverlayDismissed(true);
@@ -402,7 +470,8 @@ export function App() {
     setPeerLikedYou(false);
     setHasSentContact(false);
     stopAll();
-  }, [stopAll]);
+    navigate('/');
+  }, [stopAll, navigate]);
 
   // ---- Timer math ----
   const secondsLeft = useMemo(() => {
@@ -424,25 +493,29 @@ export function App() {
     );
   }
 
-  if (phase === 'idle') {
+  if (mediaError) {
     return (
-      <>
-        <Landing
-          onStart={startMatching}
-          starting={starting}
-          mediaError={mediaError}
-          onDismissError={() => setMediaError(null)}
-          onEditProfile={() => setShowProfileEditor(true)}
-          profile={myProfile}
-        />
-        {showProfileEditor && (
-          <ProfileEditor
-            initial={myProfile}
-            onSave={handleSaveProfile}
-            onCancel={() => setShowProfileEditor(false)}
-          />
-        )}
-      </>
+      <div className="error-screen">
+        <div className="error-card">
+          <div className="error-icon">📵</div>
+          <h2>{
+            mediaError === 'denied' ? 'Camera & mic blocked' :
+            mediaError === 'in-use' ? 'Camera is busy' :
+            "Couldn't reach your camera"
+          }</h2>
+          <p>{
+            mediaError === 'denied' ? "Click the camera icon in your browser's address bar, allow access, then try again." :
+            mediaError === 'in-use' ? 'Another tab or app is using your camera. Close it and try again.' :
+            'Make sure a camera and microphone are connected, then try again.'
+          }</p>
+          <button className="cta-primary" onClick={() => { setMediaError(null); startMatching(); }}>
+            Try again
+          </button>
+          <button className="leave-btn" onClick={() => navigate('/')} style={{ marginTop: 12 }}>
+            Back to home
+          </button>
+        </div>
+      </div>
     );
   }
 

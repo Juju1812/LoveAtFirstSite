@@ -3,7 +3,7 @@ import { type Profile, resizePhoto, clearProfile } from '../profile';
 
 interface Props {
   initial: Profile | null;
-  onSave: (p: Profile) => void;
+  onSave: (p: Profile) => void | Promise<void>;
   onCancel: () => void;
 }
 

@@ -2,7 +2,15 @@ import express from 'express';
 import http from 'node:http';
 import cors from 'cors';
 import { Server } from 'socket.io';
-import { recordMatch, recordContact, recordReport } from './db.js';
+import {
+  recordMatch, recordContact, recordReport,
+  createUser, getUserByEmail, getUserById,
+  saveUserProfile, getUserProfile
+} from './db.js';
+import {
+  hashPassword, verifyPassword, signToken,
+  authMiddleware, requireAuth
+} from './auth.js';
 
 const PORT = process.env.PORT || 3001;
 const TIMER_SECONDS = 120;
@@ -14,10 +22,77 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS || '*')
 const corsOrigin = allowedOrigins.includes('*') ? '*' : allowedOrigins;
 
 const app = express();
-app.use(cors({ origin: corsOrigin }));
-app.use(express.json());
+app.use(cors({
+  origin: corsOrigin,
+  credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+app.use(express.json({ limit: '600kb' })); // photos as base64 can be ~400KB
+app.use(authMiddleware);
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
+
+// ---- Auth ----
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+app.post('/api/signup', async (req, res) => {
+  const { email, password } = req.body ?? {};
+  if (typeof email !== 'string' || !EMAIL_RE.test(email)) {
+    return res.status(400).json({ error: 'Invalid email' });
+  }
+  if (typeof password !== 'string' || password.length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  }
+  if (getUserByEmail(email)) {
+    return res.status(409).json({ error: 'An account with that email already exists' });
+  }
+  try {
+    const hash = await hashPassword(password);
+    const userId = createUser(email, hash);
+    const token = signToken(userId);
+    const user = getUserById(userId);
+    res.json({ token, user: { id: user.id, email: user.email } });
+  } catch (err) {
+    console.error('signup failed', err);
+    res.status(500).json({ error: 'Signup failed' });
+  }
+});
+
+app.post('/api/login', async (req, res) => {
+  const { email, password } = req.body ?? {};
+  if (typeof email !== 'string' || typeof password !== 'string') {
+    return res.status(400).json({ error: 'Email and password required' });
+  }
+  const row = getUserByEmail(email);
+  if (!row) return res.status(401).json({ error: 'Invalid email or password' });
+  const ok = await verifyPassword(password, row.password_hash);
+  if (!ok) return res.status(401).json({ error: 'Invalid email or password' });
+  const token = signToken(row.id);
+  res.json({ token, user: { id: row.id, email: row.email } });
+});
+
+app.get('/api/me', requireAuth, (req, res) => {
+  const user = getUserById(req.userId);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  const profile = getUserProfile(req.userId);
+  res.json({ user: { id: user.id, email: user.email }, profile });
+});
+
+app.put('/api/profile', requireAuth, (req, res) => {
+  const p = req.body ?? {};
+  const safe = {
+    name: typeof p.name === 'string' ? p.name.slice(0, 60).trim() || null : null,
+    age: typeof p.age === 'number' && p.age >= 13 && p.age <= 120 ? Math.floor(p.age) : null,
+    bio: typeof p.bio === 'string' ? p.bio.slice(0, 400).trim() || null : null,
+    vibes: typeof p.vibes === 'string' ? p.vibes.slice(0, 200).trim() || null : null,
+    contact: typeof p.contact === 'string' ? p.contact.slice(0, 200).trim() || null : null,
+    photo: typeof p.photo === 'string' && p.photo.startsWith('data:image/') && p.photo.length < 400_000
+      ? p.photo : null
+  };
+  saveUserProfile(req.userId, safe);
+  res.json({ profile: safe });
+});
 
 /**
  * Return ICE servers for the client. If Twilio creds are present we mint a
