@@ -8,6 +8,7 @@ import { Timer } from './components/Timer';
 import { Controls } from './components/Controls';
 import { ChatPanel, type ChatLine } from './components/ChatPanel';
 import { MatchedOverlay } from './components/MatchedOverlay';
+import { Landing } from './components/Landing';
 
 const SIGNAL_URL =
   (import.meta.env.VITE_SIGNAL_URL as string | undefined) ??
@@ -236,7 +237,7 @@ export function App() {
   // ---- Render ----
   if (phase === 'idle') {
     return (
-      <Lobby
+      <Landing
         onStart={startMatching}
         starting={starting}
         mediaError={mediaError}
@@ -292,60 +293,3 @@ export function App() {
   );
 }
 
-interface LobbyProps {
-  onStart: () => void;
-  starting: boolean;
-  mediaError: 'denied' | 'in-use' | 'unavailable' | null;
-  onDismissError: () => void;
-}
-
-function Lobby({ onStart, starting, mediaError, onDismissError }: LobbyProps) {
-  if (mediaError) {
-    const copy = {
-      denied: {
-        title: 'Camera & mic blocked',
-        body: 'Click the camera icon in your browser\'s address bar, allow access, then try again.'
-      },
-      'in-use': {
-        title: 'Camera is busy',
-        body: 'Another tab or app is using your camera. Close it (Zoom, another browser tab, etc.) and try again.'
-      },
-      unavailable: {
-        title: 'Couldn\'t reach your camera',
-        body: 'Make sure a camera and microphone are connected, then try again.'
-      }
-    }[mediaError];
-    return (
-      <div className="lobby">
-        <div className="lobby-card lobby-error">
-          <div className="lobby-logo">📵</div>
-          <h1>{copy.title}</h1>
-          <p className="lobby-tag">{copy.body}</p>
-          <button className="lobby-cta" onClick={() => { onDismissError(); onStart(); }}>
-            Try again
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="lobby">
-      <div className="lobby-card">
-        <div className="lobby-logo">👀</div>
-        <h1>Glimpse</h1>
-        <p className="lobby-tag">60 seconds. One glimpse. No filter.</p>
-        <ul className="lobby-rules">
-          <li>📹 Random 1-on-1 video chat</li>
-          <li>⏳ 60s before swipe unlocks</li>
-          <li>♥ Both swipe right to match</li>
-          <li>💬 Chemistry score reads the vibe</li>
-        </ul>
-        <button className="lobby-cta" onClick={onStart} disabled={starting}>
-          {starting ? 'Starting camera…' : 'Find a match'}
-        </button>
-        <p className="lobby-foot">Camera & mic required. No conversation is stored.</p>
-      </div>
-    </div>
-  );
-}
