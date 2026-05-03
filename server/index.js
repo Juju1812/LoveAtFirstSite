@@ -19,6 +19,54 @@ app.use(express.json());
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
+/**
+ * Return ICE servers for the client. If Twilio creds are present we mint a
+ * short-lived NTS token (TURN included). Otherwise we fall back to public
+ * STUN — peers behind strict NATs may fail to connect.
+ *
+ * Tokens are cached for ~50 minutes (Twilio tokens last 1h by default).
+ */
+const TWILIO_SID = process.env.TWILIO_ACCOUNT_SID;
+const TWILIO_TOKEN = process.env.TWILIO_AUTH_TOKEN;
+const FALLBACK_ICE = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' }
+];
+
+let iceCache = { servers: null, expiresAt: 0 };
+
+async function fetchTwilioIce() {
+  const auth = Buffer.from(`${TWILIO_SID}:${TWILIO_TOKEN}`).toString('base64');
+  const res = await fetch(
+    `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_SID}/Tokens.json`,
+    { method: 'POST', headers: { Authorization: `Basic ${auth}` } }
+  );
+  if (!res.ok) throw new Error(`Twilio ${res.status}`);
+  const body = await res.json();
+  return body.ice_servers.map(s => ({
+    urls: s.urls || s.url,
+    username: s.username,
+    credential: s.credential
+  }));
+}
+
+app.get('/ice-servers', async (_req, res) => {
+  try {
+    if (!TWILIO_SID || !TWILIO_TOKEN) {
+      return res.json({ iceServers: FALLBACK_ICE, source: 'stun-only' });
+    }
+    if (Date.now() < iceCache.expiresAt && iceCache.servers) {
+      return res.json({ iceServers: iceCache.servers, source: 'twilio-cached' });
+    }
+    const servers = await fetchTwilioIce();
+    iceCache = { servers, expiresAt: Date.now() + 50 * 60 * 1000 };
+    res.json({ iceServers: servers, source: 'twilio' });
+  } catch (err) {
+    console.error('ICE fetch failed', err);
+    res.json({ iceServers: FALLBACK_ICE, source: 'stun-fallback' });
+  }
+});
+
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: corsOrigin, methods: ['GET', 'POST'] }

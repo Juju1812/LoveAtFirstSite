@@ -33,6 +33,8 @@ export function App() {
   const [peerLikedYou, setPeerLikedYou] = useState(false);
   const [peerContact, setPeerContact] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [mediaError, setMediaError] = useState<'denied' | 'in-use' | 'unavailable' | null>(null);
+  const [starting, setStarting] = useState(false);
 
   const socketRef = useRef<Socket | null>(null);
   const chemistryRef = useRef(50);
@@ -134,6 +136,7 @@ export function App() {
     socket: socketRef.current,
     sessionId: session?.sessionId ?? null,
     role: session?.role ?? null,
+    signalUrl: SIGNAL_URL,
     onChatMessage
   });
 
@@ -154,12 +157,19 @@ export function App() {
 
   // ---- Actions ----
   const startMatching = useCallback(async () => {
+    setStarting(true);
+    setMediaError(null);
     try {
       await startMedia(); // pre-warm camera before queueing
     } catch (err) {
-      alert('Could not access camera/microphone. Please grant permission and reload.');
+      const name = (err as DOMException)?.name;
+      if (name === 'NotAllowedError' || name === 'SecurityError') setMediaError('denied');
+      else if (name === 'NotReadableError' || name === 'AbortError') setMediaError('in-use');
+      else setMediaError('unavailable');
+      setStarting(false);
       return;
     }
+    setStarting(false);
     socketRef.current?.emit('join-queue');
   }, [startMedia]);
 
@@ -225,7 +235,14 @@ export function App() {
 
   // ---- Render ----
   if (phase === 'idle') {
-    return <Lobby onStart={startMatching} />;
+    return (
+      <Lobby
+        onStart={startMatching}
+        starting={starting}
+        mediaError={mediaError}
+        onDismissError={() => setMediaError(null)}
+      />
+    );
   }
 
   return (
@@ -275,7 +292,43 @@ export function App() {
   );
 }
 
-function Lobby({ onStart }: { onStart: () => void }) {
+interface LobbyProps {
+  onStart: () => void;
+  starting: boolean;
+  mediaError: 'denied' | 'in-use' | 'unavailable' | null;
+  onDismissError: () => void;
+}
+
+function Lobby({ onStart, starting, mediaError, onDismissError }: LobbyProps) {
+  if (mediaError) {
+    const copy = {
+      denied: {
+        title: 'Camera & mic blocked',
+        body: 'Click the camera icon in your browser\'s address bar, allow access, then try again.'
+      },
+      'in-use': {
+        title: 'Camera is busy',
+        body: 'Another tab or app is using your camera. Close it (Zoom, another browser tab, etc.) and try again.'
+      },
+      unavailable: {
+        title: 'Couldn\'t reach your camera',
+        body: 'Make sure a camera and microphone are connected, then try again.'
+      }
+    }[mediaError];
+    return (
+      <div className="lobby">
+        <div className="lobby-card lobby-error">
+          <div className="lobby-logo">📵</div>
+          <h1>{copy.title}</h1>
+          <p className="lobby-tag">{copy.body}</p>
+          <button className="lobby-cta" onClick={() => { onDismissError(); onStart(); }}>
+            Try again
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="lobby">
       <div className="lobby-card">
@@ -288,8 +341,8 @@ function Lobby({ onStart }: { onStart: () => void }) {
           <li>♥ Both swipe right to match</li>
           <li>💬 Chemistry score reads the vibe</li>
         </ul>
-        <button className="lobby-cta" onClick={onStart}>
-          Find a match
+        <button className="lobby-cta" onClick={onStart} disabled={starting}>
+          {starting ? 'Starting camera…' : 'Find a match'}
         </button>
         <p className="lobby-foot">Camera & mic required. No conversation is stored.</p>
       </div>

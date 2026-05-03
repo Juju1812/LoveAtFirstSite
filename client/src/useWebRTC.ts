@@ -3,15 +3,37 @@ import type { Socket } from 'socket.io-client';
 
 type Role = 'initiator' | 'receiver';
 
-const ICE_SERVERS: RTCIceServer[] = [
+const FALLBACK_ICE: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' }
 ];
+
+let iceServersCache: { servers: RTCIceServer[]; fetchedAt: number } | null = null;
+
+async function loadIceServers(signalUrl: string): Promise<RTCIceServer[]> {
+  // Cache for 45 min — Twilio tokens last 60 min on the server.
+  if (iceServersCache && Date.now() - iceServersCache.fetchedAt < 45 * 60 * 1000) {
+    return iceServersCache.servers;
+  }
+  try {
+    const res = await fetch(`${signalUrl.replace(/\/$/, '')}/ice-servers`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const body = await res.json();
+    if (Array.isArray(body.iceServers) && body.iceServers.length > 0) {
+      iceServersCache = { servers: body.iceServers, fetchedAt: Date.now() };
+      return body.iceServers;
+    }
+  } catch (err) {
+    console.warn('ICE server fetch failed, using fallback STUN', err);
+  }
+  return FALLBACK_ICE;
+}
 
 export interface UseWebRTCOpts {
   socket: Socket | null;
   sessionId: string | null;
   role: Role | null;
+  signalUrl: string;
   onChatMessage: (msg: string) => void;
 }
 
@@ -25,7 +47,7 @@ export interface UseWebRTC {
 }
 
 export function useWebRTC(opts: UseWebRTCOpts): UseWebRTC {
-  const { socket, sessionId, role, onChatMessage } = opts;
+  const { socket, sessionId, role, signalUrl, onChatMessage } = opts;
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const dcRef = useRef<RTCDataChannel | null>(null);
@@ -113,7 +135,10 @@ export function useWebRTC(opts: UseWebRTCOpts): UseWebRTC {
       const stream = await startMedia();
       if (cancelled) return;
 
-      const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+      const iceServers = await loadIceServers(signalUrl);
+      if (cancelled) return;
+
+      const pc = new RTCPeerConnection({ iceServers });
       pcRef.current = pc;
 
       for (const track of stream.getTracks()) {
@@ -194,7 +219,7 @@ export function useWebRTC(opts: UseWebRTCOpts): UseWebRTC {
       socket.off('signal', onSignal);
       teardownPeer();
     };
-  }, [socket, sessionId, role, startMedia, wireDataChannel, teardownPeer]);
+  }, [socket, sessionId, role, signalUrl, startMedia, wireDataChannel, teardownPeer]);
 
   return { localStream, remoteStream, connectionState, sendChat, startMedia, stopAll };
 }

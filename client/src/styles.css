@@ -107,6 +107,15 @@ input {
 .lobby-cta:active { transform: translateY(1px); }
 .lobby-foot { color: var(--gray); font-size: 12px; margin: 16px 0 0; }
 
+.lobby-error h1 {
+  font-size: 26px;
+  background: linear-gradient(90deg, #ff5577, #ff9966);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.lobby-error .lobby-tag { margin-bottom: 24px; line-height: 1.5; }
+
 /* ---------- App layout ---------- */
 
 .app {
