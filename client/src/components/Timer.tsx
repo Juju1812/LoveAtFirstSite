@@ -1,4 +1,7 @@
-interface Props { secondsLeft: number; }
+interface Props {
+  secondsLeft: number;
+  matched?: boolean;
+}
 
 function format(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
@@ -7,17 +10,17 @@ function format(seconds: number): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-export function Timer({ secondsLeft }: Props) {
+export function Timer({ secondsLeft, matched }: Props) {
   if (secondsLeft <= 0) {
     return (
       <div className="timer timer-unlocked">
-        <span>🔥 Make your move</span>
+        <span>{matched ? '💞 Matched · keep talking' : '🔥 Make your move'}</span>
       </div>
     );
   }
   return (
     <div className="timer">
-      <span className="timer-label">Get to know each other</span>
+      <span className="timer-label">{matched ? 'Matched' : 'Get to know each other'}</span>
       <span className="timer-value">{format(secondsLeft)}</span>
     </div>
   );

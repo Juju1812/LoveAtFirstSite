@@ -439,9 +439,10 @@ function Match() {
     }
   }, [connectionState, phase]);
 
-  // Tick clock for timer countdown.
+  // Tick clock for timer countdown — keep going through 'matched' too so the
+  // timer doesn't snap back to 2:00 after a successful match.
   useEffect(() => {
-    if (phase !== 'live') return;
+    if (phase !== 'live' && phase !== 'matched') return;
     const id = setInterval(() => setNow(Date.now()), 250);
     return () => clearInterval(id);
   }, [phase]);
@@ -514,9 +515,12 @@ function Match() {
     applyChemistryDelta(nextChemistry(chemistryRef.current, s));
   }, [sendChat, applyChemistryDelta]);
 
-  // Timer math.
+  // Timer math. Keeps counting through 'matched' so the displayed time doesn't
+  // reset on a successful match — the call continues, the clock should too.
   const secondsLeft = useMemo(() => {
-    if (!session || phase !== 'live') return session?.timerSeconds ?? 120;
+    if (!session || (phase !== 'live' && phase !== 'matched')) {
+      return session?.timerSeconds ?? 120;
+    }
     const elapsed = (now - session.startedAt) / 1000;
     return Math.max(0, Math.ceil(session.timerSeconds - elapsed));
   }, [session, now, phase]);
@@ -684,7 +688,7 @@ function Match() {
           <span className="topbar-back-label">Back</span>
         </button>
         <ChemistryMeter score={chemistry} />
-        <Timer secondsLeft={secondsLeft} />
+        <Timer secondsLeft={secondsLeft} matched={phase === 'matched'} />
         <button className="topbar-report" onClick={report} title="Report this user">
           🚩
         </button>
