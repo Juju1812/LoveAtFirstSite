@@ -49,6 +49,7 @@ export function Landing({ onStart, starting, mediaError, onDismissError, onEditP
     <div className="landing">
       <Nav onStart={onStart} starting={starting} onEditProfile={onEditProfile} profile={profile} user={user} onLogout={onLogout} />
       <Hero onStart={onStart} starting={starting} onEditProfile={onEditProfile} hasProfile={hasMeaningfulProfile(profile)} />
+      <PreviewGallery />
       <HowItWorks />
       <WhyGlimpse />
       <Safety />
@@ -170,8 +171,19 @@ function HeroVisual() {
             <span className="hero-mock-timer">1:24</span>
           </div>
           <div className="hero-mock-stage">
-            <div className="hero-mock-remote" />
-            <div className="hero-mock-local" />
+            <img
+              className="hero-mock-remote-photo"
+              src="https://randomuser.me/api/portraits/women/65.jpg"
+              alt=""
+              loading="eager"
+            />
+            <div className="hero-mock-reaction">❤️</div>
+            <img
+              className="hero-mock-local-photo"
+              src="https://randomuser.me/api/portraits/men/32.jpg"
+              alt=""
+              loading="eager"
+            />
           </div>
           <div className="hero-mock-controls">
             <span className="hero-mock-btn hero-mock-nope">✕</span>
@@ -180,6 +192,80 @@ function HeroVisual() {
         </div>
       </div>
     </div>
+  );
+}
+
+function PreviewGallery() {
+  const scenes = [
+    {
+      remote: 'https://randomuser.me/api/portraits/men/45.jpg',
+      local: 'https://randomuser.me/api/portraits/women/12.jpg',
+      chem: 64, time: '1:46', caption: 'You\'re both warming up.',
+      reaction: '😂',
+      tilt: -4
+    },
+    {
+      remote: 'https://randomuser.me/api/portraits/women/40.jpg',
+      local: 'https://randomuser.me/api/portraits/men/22.jpg',
+      chem: 89, time: '0:42', caption: 'Strong spark — keep going.',
+      reaction: '🔥',
+      tilt: 3,
+      featured: true
+    },
+    {
+      remote: 'https://randomuser.me/api/portraits/men/77.jpg',
+      local: 'https://randomuser.me/api/portraits/women/29.jpg',
+      chem: 92, time: 'matched', caption: 'It\'s a match. 💞',
+      reaction: '💞',
+      tilt: -2,
+      matched: true
+    }
+  ];
+  return (
+    <section className="section section-gallery">
+      <div className="section-inner">
+        <div className="section-eyebrow">What a call looks like</div>
+        <h2 className="section-title">
+          Real faces. Real moments. <span className="accent">No filters.</span>
+        </h2>
+        <div className="gallery-row">
+          {scenes.map((s, i) => (
+            <div
+              key={i}
+              className={`gallery-phone ${s.featured ? 'gallery-phone-featured' : ''}`}
+              style={{ transform: `rotate(${s.tilt}deg)` }}
+              aria-hidden
+            >
+              <div className="gallery-phone-screen">
+                <div className="hero-mock-topbar">
+                  <span className="hero-mock-brand">Glimpse</span>
+                  <span className="hero-mock-chemistry">💘 {s.chem}%</span>
+                  <span className={`hero-mock-timer ${s.matched ? 'gallery-matched-pill' : ''}`}>
+                    {s.matched ? '💞 match' : s.time}
+                  </span>
+                </div>
+                <div className="hero-mock-stage">
+                  <img className="hero-mock-remote-photo" src={s.remote} alt="" loading="lazy" />
+                  <div className="hero-mock-reaction">{s.reaction}</div>
+                  <img className="hero-mock-local-photo" src={s.local} alt="" loading="lazy" />
+                </div>
+                <div className="hero-mock-controls">
+                  {s.matched ? (
+                    <span className="gallery-matched-text">It's a match 💞</span>
+                  ) : (
+                    <>
+                      <span className="hero-mock-btn hero-mock-nope">✕</span>
+                      <span className="hero-mock-btn hero-mock-like">♥</span>
+                    </>
+                  )}
+                </div>
+              </div>
+              <div className="gallery-caption">{s.caption}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
   );
 }
 
