@@ -1,0 +1,211 @@
+import { useState } from 'react';
+import { Link } from 'react-router-dom';
+import { useAuth } from '../AuthContext';
+import { type Profile, type Gender } from '../profile';
+import { ProfileEditor } from './ProfileEditor';
+
+const GENDERS: Array<{ id: Gender; label: string }> = [
+  { id: 'man', label: 'Man' },
+  { id: 'woman', label: 'Woman' },
+  { id: 'nonbinary', label: 'Non-binary' },
+  { id: 'other', label: 'Other / prefer not to say' }
+];
+
+const LOOKING_FOR: Array<{ id: string; label: string }> = [
+  { id: 'men', label: 'Men' },
+  { id: 'women', label: 'Women' },
+  { id: 'nonbinary', label: 'Non-binary' },
+  { id: 'everyone', label: 'Everyone' }
+];
+
+export function Settings() {
+  const { user, profile, setProfile } = useAuth();
+  const [editing, setEditing] = useState(false);
+  const [gender, setGenderState] = useState<Gender | null>(profile?.gender ?? null);
+  const [lookingFor, setLookingFor] = useState<string[]>(
+    profile?.looking_for ? profile.looking_for.split(',') : ['everyone']
+  );
+  const [ageMin, setAgeMin] = useState<string>(profile?.age_min?.toString() ?? '');
+  const [ageMax, setAgeMax] = useState<string>(profile?.age_max?.toString() ?? '');
+  const [savedHint, setSavedHint] = useState<string | null>(null);
+
+  function toggleLF(id: string) {
+    setLookingFor(prev => {
+      // If "everyone" picked, clear others
+      if (id === 'everyone') return ['everyone'];
+      const without = prev.filter(x => x !== 'everyone');
+      return without.includes(id) ? without.filter(x => x !== id) : [...without, id];
+    });
+  }
+
+  async function savePreferences() {
+    const updates: Profile = {
+      ...(profile ?? {}),
+      gender,
+      looking_for: lookingFor.length ? lookingFor.join(',') : null,
+      age_min: ageMin ? parseInt(ageMin, 10) : null,
+      age_max: ageMax ? parseInt(ageMax, 10) : null
+    };
+    await setProfile(updates);
+    setSavedHint('Saved ✓');
+    setTimeout(() => setSavedHint(null), 1800);
+  }
+
+  return (
+    <div className="settings-page">
+      <header className="settings-nav">
+        <Link to="/" className="settings-back">← Home</Link>
+        <h1>Settings</h1>
+      </header>
+
+      <main className="settings-main">
+        {/* ---- Profile ---- */}
+        <section id="profile" className="settings-section">
+          <div className="settings-section-header">
+            <h2>Profile</h2>
+            <p>Only shown to people you match with.</p>
+          </div>
+          <div className="settings-profile-row">
+            {profile?.photo ? (
+              <img className="settings-profile-pic" src={profile.photo} alt="" />
+            ) : (
+              <div className="settings-profile-pic settings-profile-pic-empty">👤</div>
+            )}
+            <div className="settings-profile-meta">
+              <div className="settings-profile-name">{profile?.name || 'Anonymous'}{profile?.age ? `, ${profile.age}` : ''}</div>
+              <div className="settings-profile-bio">{profile?.bio || 'No bio yet.'}</div>
+            </div>
+            <button className="settings-edit-btn" onClick={() => setEditing(true)}>
+              {profile?.name || profile?.bio ? 'Edit' : 'Create'}
+            </button>
+          </div>
+        </section>
+
+        {/* ---- Match preferences ---- */}
+        <section className="settings-section">
+          <div className="settings-section-header">
+            <h2>Match preferences</h2>
+            <p>Used to filter who you're matched with. Leave anything blank to disable that filter.</p>
+          </div>
+
+          <div className="settings-field">
+            <label>I am</label>
+            <div className="chip-row">
+              {GENDERS.map(g => (
+                <button
+                  key={g.id}
+                  type="button"
+                  className={`chip ${gender === g.id ? 'chip-active' : ''}`}
+                  onClick={() => setGenderState(gender === g.id ? null : g.id)}
+                >
+                  {g.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="settings-field">
+            <label>I want to meet</label>
+            <div className="chip-row">
+              {LOOKING_FOR.map(lf => (
+                <button
+                  key={lf.id}
+                  type="button"
+                  className={`chip ${lookingFor.includes(lf.id) ? 'chip-active' : ''}`}
+                  onClick={() => toggleLF(lf.id)}
+                >
+                  {lf.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="settings-field settings-field-row">
+            <label>Age range</label>
+            <div className="age-range">
+              <input
+                type="number" min={13} max={120}
+                placeholder="min"
+                value={ageMin}
+                onChange={(e) => setAgeMin(e.target.value)}
+              />
+              <span>to</span>
+              <input
+                type="number" min={13} max={120}
+                placeholder="max"
+                value={ageMax}
+                onChange={(e) => setAgeMax(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="settings-actions">
+            <button className="settings-save-btn" onClick={savePreferences}>Save preferences</button>
+            {savedHint && <span className="settings-saved-hint">{savedHint}</span>}
+          </div>
+
+          {!user && (
+            <div className="settings-note">
+              💡 Preferences sync across devices when you <Link to="/signup">create an account</Link>.
+            </div>
+          )}
+        </section>
+
+        {/* ---- Identity verification (OPTIONAL, no nag) ---- */}
+        <section className="settings-section">
+          <div className="settings-section-header">
+            <h2>Identity verification</h2>
+            <p>Optional. Verify your identity once and people you match with will see a small badge. We don't push this — only do it if you want to.</p>
+          </div>
+          <div className="verify-row">
+            <div className="verify-status">
+              {profile?.verified ? (
+                <span className="verify-badge verify-badge-on">✓ Verified</span>
+              ) : (
+                <span className="verify-badge verify-badge-off">Not verified</span>
+              )}
+            </div>
+            <button className="settings-edit-btn" disabled title="Coming soon">
+              {profile?.verified ? 'Re-verify' : 'Verify (coming soon)'}
+            </button>
+          </div>
+          <div className="settings-fineprint">
+            Verification will use a quick selfie + photo-ID match. We never store the ID — only the pass/fail result.
+          </div>
+        </section>
+
+        {/* ---- Account ---- */}
+        <section className="settings-section">
+          <div className="settings-section-header">
+            <h2>Account</h2>
+            <p>{user ? user.email : 'Not signed in.'}</p>
+          </div>
+          {!user && (
+            <div className="settings-actions">
+              <Link to="/login" className="settings-secondary-btn">Sign in</Link>
+              <Link to="/signup" className="settings-save-btn">Create account</Link>
+            </div>
+          )}
+        </section>
+      </main>
+
+      {editing && (
+        <ProfileEditor
+          initial={profile}
+          onSave={async (p) => {
+            // Preserve preferences while editing the basic fields
+            await setProfile({
+              ...p,
+              gender,
+              looking_for: lookingFor.length ? lookingFor.join(',') : null,
+              age_min: ageMin ? parseInt(ageMin, 10) : null,
+              age_max: ageMax ? parseInt(ageMax, 10) : null
+            });
+            setEditing(false);
+          }}
+          onCancel={() => setEditing(false)}
+        />
+      )}
+    </div>
+  );
+}

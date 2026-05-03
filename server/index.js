@@ -5,7 +5,8 @@ import { Server } from 'socket.io';
 import {
   recordMatch, recordContact, recordReport,
   createUser, getUserByEmail, getUserById,
-  saveUserProfile, getUserProfile
+  saveUserProfile, getUserProfile,
+  saveConnection, unsaveConnection, listSavedConnections
 } from './db.js';
 import {
   hashPassword, verifyPassword, signToken,
@@ -81,17 +82,110 @@ app.get('/api/me', requireAuth, (req, res) => {
 
 app.put('/api/profile', requireAuth, (req, res) => {
   const p = req.body ?? {};
+  const validGenders = ['man', 'woman', 'nonbinary', 'other', null];
+  const validLF = (lf) => {
+    if (!lf || typeof lf !== 'string') return null;
+    const tokens = lf.split(',').map(s => s.trim()).filter(Boolean);
+    const allowed = new Set(['men', 'women', 'nonbinary', 'everyone']);
+    const filtered = tokens.filter(t => allowed.has(t));
+    return filtered.length ? filtered.join(',') : null;
+  };
+  const ageInt = (v) =>
+    typeof v === 'number' && v >= 13 && v <= 120 ? Math.floor(v) : null;
+  const gender = validGenders.includes(p.gender) ? p.gender : null;
+
   const safe = {
     name: typeof p.name === 'string' ? p.name.slice(0, 60).trim() || null : null,
-    age: typeof p.age === 'number' && p.age >= 13 && p.age <= 120 ? Math.floor(p.age) : null,
+    age: ageInt(p.age),
     bio: typeof p.bio === 'string' ? p.bio.slice(0, 400).trim() || null : null,
     vibes: typeof p.vibes === 'string' ? p.vibes.slice(0, 200).trim() || null : null,
     contact: typeof p.contact === 'string' ? p.contact.slice(0, 200).trim() || null : null,
     photo: typeof p.photo === 'string' && p.photo.startsWith('data:image/') && p.photo.length < 400_000
-      ? p.photo : null
+      ? p.photo : null,
+    gender,
+    looking_for: validLF(p.looking_for),
+    age_min: ageInt(p.age_min),
+    age_max: ageInt(p.age_max)
   };
   saveUserProfile(req.userId, safe);
   res.json({ profile: safe });
+});
+
+// ---- Saved connections ----
+app.get('/api/saved', requireAuth, (req, res) => {
+  res.json({ saved: listSavedConnections(req.userId) });
+});
+
+app.post('/api/saved', requireAuth, (req, res) => {
+  const { userId, note } = req.body ?? {};
+  if (typeof userId !== 'number' || userId === req.userId) {
+    return res.status(400).json({ error: 'Invalid user id' });
+  }
+  if (!getUserById(userId)) return res.status(404).json({ error: 'User not found' });
+  saveConnection(req.userId, userId, typeof note === 'string' ? note.slice(0, 200) : null);
+  res.json({ ok: true });
+});
+
+app.delete('/api/saved/:userId', requireAuth, (req, res) => {
+  const id = parseInt(req.params.userId, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'Bad id' });
+  unsaveConnection(req.userId, id);
+  res.json({ ok: true });
+});
+
+// ---- AI conversation coach (Claude Haiku) ----
+const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+const COACH_RATE_MS = 15_000;
+const lastCoachByIp = new Map();
+
+app.post('/api/coach', async (req, res) => {
+  if (!ANTHROPIC_KEY) {
+    return res.json({ tip: null, reason: 'coach-disabled' });
+  }
+  // Light per-IP throttle to keep costs sane.
+  const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+  const last = lastCoachByIp.get(ip) || 0;
+  if (Date.now() - last < COACH_RATE_MS) {
+    return res.json({ tip: null, reason: 'rate-limited' });
+  }
+  lastCoachByIp.set(ip, Date.now());
+
+  const { transcripts, topic, secondsLeft } = req.body ?? {};
+  const lines = Array.isArray(transcripts) ? transcripts.slice(-12) : [];
+  const ctx = lines.length
+    ? lines.map((l, i) => `[${i + 1}] ${String(l).slice(0, 200)}`).join('\n')
+    : '(silence — no recent dialogue)';
+
+  const system = `You are a real-time coach for someone on a 2-minute video date. The user can hear you only as a small text card on screen. Read the recent transcript and produce ONE short tip (max 12 words) — a specific, useful next-move suggestion (a question to ask, a topic to mention, or a vibe to bring). No quotes, no preamble, no greeting, no emoji. Just the tip.`;
+
+  const userMsg = `Topic: ${topic || 'open'}\nTime left: ${secondsLeft ?? '?'}s\n\nRecent transcripts (most recent last):\n${ctx}\n\nGive me the tip now.`;
+
+  try {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': ANTHROPIC_KEY,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 60,
+        system,
+        messages: [{ role: 'user', content: userMsg }]
+      })
+    });
+    if (!r.ok) {
+      console.warn('Anthropic API error', r.status, await r.text());
+      return res.json({ tip: null, reason: 'upstream-error' });
+    }
+    const body = await r.json();
+    const tip = (body?.content?.[0]?.text || '').trim().replace(/^"|"$/g, '');
+    res.json({ tip: tip || null });
+  } catch (err) {
+    console.warn('coach failed', err);
+    res.json({ tip: null, reason: 'error' });
+  }
 });
 
 /**
@@ -152,46 +246,91 @@ const io = new Server(server, {
  * only the final match record (when both users swipe right) and reports
  * land in SQLite. The rest is ephemeral by design.
  */
-const queue = [];                    // socket ids waiting for a partner
+// Each queue entry: { socketId, topic, prefs, userProfile }
+const queue = [];
 const sessions = new Map();          // sessionId -> session
 const userToSession = new Map();     // socketId -> sessionId
+
+// Mutual compatibility check: do their preferences allow each other?
+function compatible(a, b) {
+  // If a user has no profile/prefs, they're match-anyone
+  function oneSideOk(self, other) {
+    const lf = self?.looking_for;
+    if (!lf || lf === '' || lf === 'everyone') return true;
+    const want = lf.split(',').map(s => s.trim()).filter(Boolean);
+    if (want.length === 0) return true;
+    if (!other?.gender) return true; // can't filter on missing data
+    return want.includes(other.gender);
+  }
+  function ageOk(self, other) {
+    if (!other?.age) return true;
+    if (self?.age_min != null && other.age < self.age_min) return false;
+    if (self?.age_max != null && other.age > self.age_max) return false;
+    return true;
+  }
+  return oneSideOk(a, b) && oneSideOk(b, a) && ageOk(a, b) && ageOk(b, a);
+}
 
 function makeSessionId() {
   return 'sess_' + Math.random().toString(36).slice(2, 10);
 }
 
 function pairUp() {
-  // Pull the two oldest still-connected sockets off the queue.
-  while (queue.length >= 2) {
-    const aId = queue.shift();
-    const bId = queue.shift();
-    const a = io.sockets.sockets.get(aId);
-    const b = io.sockets.sockets.get(bId);
-    if (!a) { if (b) queue.unshift(b.id); continue; }
-    if (!b) { queue.unshift(a.id); return; }
+  // Walk the queue and pair the first compatible pair (matching topic + mutual prefs).
+  // O(n^2) but n is tiny in practice; optimise later if needed.
+  for (let i = 0; i < queue.length; i++) {
+    const a = queue[i];
+    const aSock = io.sockets.sockets.get(a.socketId);
+    if (!aSock) { queue.splice(i, 1); i--; continue; }
+    for (let j = i + 1; j < queue.length; j++) {
+      const b = queue[j];
+      const bSock = io.sockets.sockets.get(b.socketId);
+      if (!bSock) { queue.splice(j, 1); j--; continue; }
+      // Topic must match (empty string or 'any' counts as wildcard)
+      const topicOk =
+        !a.topic || !b.topic ||
+        a.topic === 'any' || b.topic === 'any' ||
+        a.topic === b.topic;
+      if (!topicOk) continue;
+      if (!compatible(a.prefs, b.prefs)) continue;
 
-    const sessionId = makeSessionId();
-    const session = {
-      id: sessionId,
-      users: [a.id, b.id],
-      // a is the "polite"/initiator, b waits for the offer.
-      initiator: a.id,
-      swipes: { [a.id]: null, [b.id]: null },
-      chemistry: 50,
-      startedAt: Date.now(),
-      timerUnlocksAt: Date.now() + TIMER_SECONDS * 1000,
-      matched: false,
-      matchDbId: null
-    };
-    sessions.set(sessionId, session);
-    userToSession.set(a.id, sessionId);
-    userToSession.set(b.id, sessionId);
+      // Pair them
+      queue.splice(j, 1);
+      queue.splice(i, 1);
 
-    a.join(sessionId);
-    b.join(sessionId);
+      const sessionId = makeSessionId();
+      const session = {
+        id: sessionId,
+        users: [a.socketId, b.socketId],
+        userIds: [a.userId ?? null, b.userId ?? null],
+        initiator: a.socketId,
+        topic: a.topic === 'any' ? b.topic : a.topic,
+        swipes: { [a.socketId]: null, [b.socketId]: null },
+        chemistry: 50,
+        startedAt: Date.now(),
+        timerUnlocksAt: Date.now() + TIMER_SECONDS * 1000,
+        matched: false,
+        matchDbId: null
+      };
+      sessions.set(sessionId, session);
+      userToSession.set(a.socketId, sessionId);
+      userToSession.set(b.socketId, sessionId);
 
-    a.emit('paired', { sessionId, peerId: b.id, role: 'initiator', timerSeconds: TIMER_SECONDS });
-    b.emit('paired', { sessionId, peerId: a.id, role: 'receiver', timerSeconds: TIMER_SECONDS });
+      aSock.join(sessionId);
+      bSock.join(sessionId);
+
+      aSock.emit('paired', {
+        sessionId, timerSeconds: TIMER_SECONDS, topic: session.topic,
+        peerId: b.socketId, role: 'initiator', peerUserId: b.userId ?? null
+      });
+      bSock.emit('paired', {
+        sessionId, timerSeconds: TIMER_SECONDS, topic: session.topic,
+        peerId: a.socketId, role: 'receiver', peerUserId: a.userId ?? null
+      });
+
+      // Recurse — there might be other pairs ready.
+      return pairUp();
+    }
   }
 }
 
@@ -214,15 +353,42 @@ function endSession(sessionId, reason) {
 }
 
 io.on('connection', (socket) => {
-  socket.on('join-queue', () => {
+  // Optional auth via socket query: client sends ?token=... so we know the user.
+  // We use it only to record saved-connection identities; matching is anonymous.
+  socket.userId = null;
+  try {
+    const tokenFromQuery = socket.handshake?.auth?.token || socket.handshake?.query?.token;
+    if (tokenFromQuery) {
+      // Lazily import verifyToken to avoid circular issues
+      import('./auth.js').then(({ verifyToken }) => {
+        const uid = verifyToken(tokenFromQuery);
+        if (uid) socket.userId = uid;
+      });
+    }
+  } catch { /* noop */ }
+
+  socket.on('join-queue', (opts = {}) => {
     if (userToSession.has(socket.id)) return; // already paired
-    if (!queue.includes(socket.id)) queue.push(socket.id);
-    socket.emit('queued', { position: queue.indexOf(socket.id) + 1 });
+    // Remove any existing entry for this socket
+    const existing = queue.findIndex(q => q.socketId === socket.id);
+    if (existing !== -1) queue.splice(existing, 1);
+
+    const topic = typeof opts.topic === 'string' ? opts.topic.slice(0, 30) : 'any';
+    const prefs = (opts.prefs && typeof opts.prefs === 'object') ? {
+      gender: typeof opts.prefs.gender === 'string' ? opts.prefs.gender : null,
+      age: typeof opts.prefs.age === 'number' ? opts.prefs.age : null,
+      looking_for: typeof opts.prefs.looking_for === 'string' ? opts.prefs.looking_for : null,
+      age_min: typeof opts.prefs.age_min === 'number' ? opts.prefs.age_min : null,
+      age_max: typeof opts.prefs.age_max === 'number' ? opts.prefs.age_max : null
+    } : null;
+
+    queue.push({ socketId: socket.id, topic, prefs, userId: socket.userId });
+    socket.emit('queued', { position: queue.length });
     pairUp();
   });
 
   socket.on('leave-queue', () => {
-    const idx = queue.indexOf(socket.id);
+    const idx = queue.findIndex(q => q.socketId === socket.id);
     if (idx !== -1) queue.splice(idx, 1);
   });
 
@@ -266,10 +432,11 @@ io.on('connection', (socket) => {
     if (both && !session.matched) {
       session.matched = true;
       session.matchDbId = recordMatch(session.users[0], session.users[1], session.chemistry);
-      io.to(session.id).emit('matched', {
-        matchId: session.matchDbId,
-        chemistry: session.chemistry
-      });
+      // Send each side the OTHER user's userId (for save-connection feature)
+      const [aSocket, bSocket] = session.users;
+      const [aUid, bUid] = session.userIds || [null, null];
+      io.to(aSocket).emit('matched', { matchId: session.matchDbId, chemistry: session.chemistry, peerUserId: bUid });
+      io.to(bSocket).emit('matched', { matchId: session.matchDbId, chemistry: session.chemistry, peerUserId: aUid });
     }
   });
 
@@ -307,7 +474,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    const idx = queue.indexOf(socket.id);
+    const idx = queue.findIndex(q => q.socketId === socket.id);
     if (idx !== -1) queue.splice(idx, 1);
 
     const sessionId = userToSession.get(socket.id);

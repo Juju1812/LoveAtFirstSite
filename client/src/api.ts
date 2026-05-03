@@ -53,3 +53,30 @@ export async function fetchMe(): Promise<{ user: User; profile: Profile | null }
 export async function saveProfileToServer(profile: Profile): Promise<{ profile: Profile }> {
   return apiFetch('/api/profile', { method: 'PUT', body: JSON.stringify(profile) });
 }
+
+export interface SavedConnection {
+  user_id: number;
+  saved_at: number;
+  note: string | null;
+  name: string | null;
+  photo: string | null;
+  bio: string | null;
+  vibes: string | null;
+  mutual: boolean;
+}
+
+export async function listSaved(): Promise<{ saved: SavedConnection[] }> {
+  return apiFetch('/api/saved');
+}
+
+export async function saveConnection(userId: number, note?: string): Promise<void> {
+  await apiFetch('/api/saved', { method: 'POST', body: JSON.stringify({ userId, note }) });
+}
+
+export async function unsaveConnection(userId: number): Promise<void> {
+  await apiFetch(`/api/saved/${userId}`, { method: 'DELETE' });
+}
+
+export async function getCoachTip(input: { transcripts: string[]; topic?: string; secondsLeft?: number }): Promise<{ tip: string | null }> {
+  return apiFetch('/api/coach', { method: 'POST', body: JSON.stringify(input) });
+}

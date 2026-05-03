@@ -6,9 +6,12 @@ interface Props {
   stats: CallStats;
   onGoAgain: () => void;
   onDone: () => void;
+  canSave: boolean;
+  saved: boolean;
+  onSavePeer: () => void;
 }
 
-export function ResultsScreen({ stats, onGoAgain, onDone }: Props) {
+export function ResultsScreen({ stats, onGoAgain, onDone, canSave, saved, onSavePeer }: Props) {
   const [expanded, setExpanded] = useState(false);
   const summary = summarizeStats(stats);
   const narrative = buildNarrative(stats);
@@ -77,6 +80,21 @@ export function ResultsScreen({ stats, onGoAgain, onDone }: Props) {
             </button>
           )}
         </div>
+
+        {canSave && (
+          <div className="results-save-row">
+            <div className="results-save-text">
+              <strong>Wish you had them back?</strong> Save them — if they save you, you both get a notification.
+            </div>
+            <button
+              className={`results-save-btn ${saved ? 'results-save-btn-on' : ''}`}
+              onClick={onSavePeer}
+              disabled={saved}
+            >
+              {saved ? '✓ Saved' : '+ Save them'}
+            </button>
+          </div>
+        )}
 
         <div className="results-actions">
           <button className="results-go-again" onClick={onGoAgain}>

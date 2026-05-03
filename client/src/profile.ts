@@ -6,6 +6,9 @@
 
 const STORAGE_KEY = 'glimpse:profile:v1';
 
+export type Gender = 'man' | 'woman' | 'nonbinary' | 'other';
+export type LookingFor = 'men' | 'women' | 'nonbinary' | 'everyone';
+
 export interface Profile {
   name?: string;
   age?: number;
@@ -13,7 +16,23 @@ export interface Profile {
   vibes?: string;        // free-form interests / emojis
   contact?: string;      // optional fallback contact (IG, phone, email)
   photo?: string;        // base64 data URL, resized client-side
+  gender?: Gender | null;
+  looking_for?: string | null; // comma-separated list of LookingFor
+  age_min?: number | null;
+  age_max?: number | null;
+  verified?: boolean;
 }
+
+export const TOPICS: Array<{ id: string; label: string; emoji: string; blurb: string }> = [
+  { id: 'any', label: 'Anything', emoji: '🎲', blurb: 'No filter — meet whoever shows up.' },
+  { id: 'casual', label: 'Casual', emoji: '🍻', blurb: 'Light, fun, no pressure.' },
+  { id: 'deep', label: 'Deep talk', emoji: '🌊', blurb: 'Real questions, real answers.' },
+  { id: 'laughs', label: 'Just laughs', emoji: '😂', blurb: 'Comedy energy only.' },
+  { id: 'plans', label: 'Same-city plans', emoji: '📍', blurb: 'Looking for an actual date.' },
+  { id: 'music', label: 'Music', emoji: '🎧', blurb: 'Trade taste, find a duet.' },
+  { id: 'adventure', label: 'Adventure', emoji: '🏔️', blurb: 'Outdoorsy, restless, curious.' },
+  { id: 'drinks', label: 'After-work drinks', emoji: '🍷', blurb: 'Wind-down vibes.' }
+];
 
 export function loadProfile(): Profile | null {
   try {
@@ -74,9 +93,18 @@ export function sanitizeIncomingProfile(p: any): Profile | null {
   if (typeof p.bio === 'string') out.bio = p.bio.slice(0, 400).trim() || undefined;
   if (typeof p.vibes === 'string') out.vibes = p.vibes.slice(0, 200).trim() || undefined;
   if (typeof p.contact === 'string') out.contact = p.contact.slice(0, 200).trim() || undefined;
-  // Cap photo to ~400KB raw dataURL to prevent abuse / breakage
   if (typeof p.photo === 'string' && p.photo.startsWith('data:image/') && p.photo.length < 400_000) {
     out.photo = p.photo;
   }
   return out;
+}
+
+const VISITED_KEY = 'glimpse:visited:v1';
+
+export function isFirstVisit(): boolean {
+  return localStorage.getItem(VISITED_KEY) !== '1';
+}
+
+export function markVisited(): void {
+  localStorage.setItem(VISITED_KEY, '1');
 }

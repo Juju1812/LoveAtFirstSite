@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Routes, Route, useNavigate } from 'react-router-dom';
+import { Routes, Route, useNavigate, Navigate, useLocation } from 'react-router-dom';
 import { io, Socket } from 'socket.io-client';
 import { useWebRTC } from './useWebRTC';
 import { useSpeech } from './useSpeech';
@@ -16,8 +16,13 @@ import { Landing } from './components/Landing';
 import { ProfileEditor } from './components/ProfileEditor';
 import { ResultsScreen } from './components/ResultsScreen';
 import { LoginPage, SignupPage } from './components/AuthPages';
-import { type Profile, sanitizeIncomingProfile } from './profile';
+import { Dashboard } from './components/Dashboard';
+import { Settings } from './components/Settings';
+import { SavedList } from './components/SavedList';
+import { AICoach } from './components/AICoach';
+import { type Profile, sanitizeIncomingProfile, isFirstVisit, markVisited } from './profile';
 import { useAuth } from './AuthContext';
+import { saveConnection, getToken } from './api';
 
 const SIGNAL_URL =
   (import.meta.env.VITE_SIGNAL_URL as string | undefined) ??
@@ -36,16 +41,43 @@ interface SessionInfo {
 export function App() {
   return (
     <Routes>
-      <Route path="/" element={<HomePage />} />
+      <Route path="/" element={<HomeRoute />} />
+      <Route path="/about" element={<AboutPage />} />
       <Route path="/match" element={<Match />} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/signup" element={<SignupPage />} />
-      <Route path="*" element={<HomePage />} />
+      <Route path="/settings" element={<Settings />} />
+      <Route path="/saved" element={<SavedList />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 }
 
-function HomePage() {
+/** First-time visitors land on /about (the marketing page);
+ *  everyone else lands on the Dashboard. */
+function HomeRoute() {
+  const navigate = useNavigate();
+  const [first] = useState(() => isFirstVisit());
+
+  // Redirect first-time visitors to /about (one-time)
+  useEffect(() => {
+    if (first) navigate('/about', { replace: true });
+  }, [first, navigate]);
+
+  if (first) return null;
+  return <DashboardPage />;
+}
+
+function DashboardPage() {
+  const navigate = useNavigate();
+  const handleStart = useCallback((topic: string) => {
+    markVisited();
+    navigate(`/match?topic=${encodeURIComponent(topic)}`);
+  }, [navigate]);
+  return <Dashboard onStart={handleStart} />;
+}
+
+function AboutPage() {
   const navigate = useNavigate();
   const { user, profile, setProfile, logout } = useAuth();
   const [showProfileEditor, setShowProfileEditor] = useState(false);
@@ -55,10 +87,15 @@ function HomePage() {
     setShowProfileEditor(false);
   }, [setProfile]);
 
+  const handleStart = useCallback(() => {
+    markVisited();
+    navigate('/match');
+  }, [navigate]);
+
   return (
     <>
       <Landing
-        onStart={() => navigate('/match')}
+        onStart={handleStart}
         starting={false}
         mediaError={null}
         onDismissError={() => {}}
@@ -80,7 +117,15 @@ function HomePage() {
 
 function Match() {
   const navigate = useNavigate();
-  const { profile: authProfile, setProfile } = useAuth();
+  const location = useLocation();
+  const { user, profile: authProfile } = useAuth();
+
+  // Topic comes from query string ?topic=...
+  const topic = useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    return params.get('topic') || 'any';
+  }, [location.search]);
+
   const [phase, setPhase] = useState<Phase>('idle');
   const [session, setSession] = useState<SessionInfo | null>(null);
   const [chemistry, setChemistry] = useState(50);
@@ -96,6 +141,9 @@ function Match() {
   const [peerProfile, setPeerProfile] = useState<Profile | null>(null);
   const [hasSentContact, setHasSentContact] = useState(false);
   const [overlayDismissed, setOverlayDismissed] = useState(false);
+  const [peerUserId, setPeerUserId] = useState<number | null>(null);
+  const [recentTranscripts, setRecentTranscripts] = useState<string[]>([]);
+  const [savedPeer, setSavedPeer] = useState(false);
   const [stats, setStats] = useState<CallStats | null>(null);
   const [resultsStats, setResultsStats] = useState<CallStats | null>(null);
   const [localVideoEl, setLocalVideoEl] = useState<HTMLVideoElement | null>(null);
@@ -113,23 +161,31 @@ function Match() {
 
   // ---- Socket lifecycle ----
   useEffect(() => {
-    const socket = io(SIGNAL_URL, { transports: ['websocket'] });
+    const token = getToken();
+    const socket = io(SIGNAL_URL, {
+      transports: ['websocket'],
+      auth: token ? { token } : undefined
+    });
     socketRef.current = socket;
 
     socket.on('queued', () => setPhase('queued'));
 
-    socket.on('paired', (info: { sessionId: string; role: Role; timerSeconds: number }) => {
-      setSession({ ...info, startedAt: Date.now() });
+    socket.on('paired', (info: { sessionId: string; role: Role; timerSeconds: number; peerUserId?: number | null }) => {
+      setSession({ sessionId: info.sessionId, role: info.role, timerSeconds: info.timerSeconds, startedAt: Date.now() });
+      setPeerUserId(info.peerUserId ?? null);
       setChatLines([]);
       setSwiped(null);
       setPeerLikedYou(false);
       setPeerContact(null);
       setPeerProfile(null);
+      setPeerUserId(null);
       setHasSentContact(false);
       setOverlayDismissed(false);
       setChemistry(50);
       setStats(emptyStats());
       setResultsStats(null);
+      setRecentTranscripts([]);
+      setSavedPeer(false);
       setPhase('connecting');
     });
 
@@ -146,8 +202,9 @@ function Match() {
       setStats(prev => prev ? { ...prev, outcome: 'rejected-by-them' } : prev);
     });
 
-    socket.on('matched', ({ chemistry: c }: { chemistry: number }) => {
+    socket.on('matched', ({ chemistry: c, peerUserId: pUid }: { chemistry: number; peerUserId?: number | null }) => {
       setChemistry(c);
+      setPeerUserId(pUid ?? null);
       setPhase('matched');
       setOverlayDismissed(false);
     });
@@ -244,6 +301,7 @@ function Match() {
   const onChatMessage = useCallback((text: string) => {
     setChatLines(prev => [...prev, { from: 'them', text, ts: Date.now() }]);
     setStats(prev => prev ? { ...prev, messagesReceived: prev.messagesReceived + 1 } : prev);
+    setRecentTranscripts(prev => [...prev, `(them) ${text}`].slice(-15));
     const s = scoreText(text);
     applyChemistryDelta(nextChemistry(chemistryRef.current, s));
   }, [applyChemistryDelta]);
@@ -267,6 +325,7 @@ function Match() {
   // only the numeric score is broadcast.
   const onSpokenTranscript = useCallback((text: string) => {
     setStats(prev => prev ? { ...prev, spokenChunks: prev.spokenChunks + 1 } : prev);
+    setRecentTranscripts(prev => [...prev, text].slice(-15));
     const s = scoreText(text);
     if (s === 0) return; // skip neutral chunks to reduce noise
     applyChemistryDelta(nextChemistry(chemistryRef.current, s));
@@ -367,8 +426,15 @@ function Match() {
       return;
     }
     setStarting(false);
-    socketRef.current?.emit('join-queue');
-  }, [startMedia]);
+    const prefs = authProfile ? {
+      gender: authProfile.gender,
+      age: authProfile.age,
+      looking_for: authProfile.looking_for,
+      age_min: authProfile.age_min,
+      age_max: authProfile.age_max
+    } : null;
+    socketRef.current?.emit('join-queue', { topic, prefs });
+  }, [startMedia, topic, authProfile]);
 
   // Auto-start matching when this route mounts.
   const autoStartedRef = useRef(false);
@@ -398,6 +464,7 @@ function Match() {
     sendChat(text);
     setChatLines(prev => [...prev, { from: 'me', text, ts: Date.now() }]);
     setStats(prev => prev ? { ...prev, messagesSent: prev.messagesSent + 1 } : prev);
+    setRecentTranscripts(prev => [...prev, `(me) ${text}`].slice(-15));
     const s = scoreText(text);
     applyChemistryDelta(nextChemistry(chemistryRef.current, s));
   }, [sendChat, applyChemistryDelta]);
@@ -451,12 +518,29 @@ function Match() {
     setOverlayDismissed(true);
   }, []);
 
+  const savePeer = useCallback(async () => {
+    if (!peerUserId || !user) return;
+    try {
+      await saveConnection(peerUserId);
+      setSavedPeer(true);
+    } catch (err) {
+      console.warn('save failed', err);
+    }
+  }, [peerUserId, user]);
+
   const goAgain = useCallback(() => {
     setResultsStats(null);
     setStats(null);
     setPhase('queued');
-    socketRef.current?.emit('join-queue');
-  }, []);
+    const prefs = authProfile ? {
+      gender: authProfile.gender,
+      age: authProfile.age,
+      looking_for: authProfile.looking_for,
+      age_min: authProfile.age_min,
+      age_max: authProfile.age_max
+    } : null;
+    socketRef.current?.emit('join-queue', { topic, prefs });
+  }, [topic, authProfile]);
 
   const doneFromResults = useCallback(() => {
     setResultsStats(null);
@@ -489,6 +573,9 @@ function Match() {
         stats={resultsStats}
         onGoAgain={goAgain}
         onDone={doneFromResults}
+        canSave={!!user && !!peerUserId}
+        saved={savedPeer}
+        onSavePeer={savePeer}
       />
     );
   }
@@ -568,6 +655,13 @@ function Match() {
           onNext={next}
         />
       </footer>
+
+      <AICoach
+        active={phase === 'live'}
+        topic={topic}
+        secondsLeft={secondsLeft}
+        recentTranscripts={recentTranscripts}
+      />
 
       {toast && <div className="toast">{toast}</div>}
 
