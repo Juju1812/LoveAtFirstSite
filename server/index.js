@@ -5,7 +5,7 @@ import { Server } from 'socket.io';
 import { recordMatch, recordContact, recordReport } from './db.js';
 
 const PORT = process.env.PORT || 3001;
-const TIMER_SECONDS = 60;
+const TIMER_SECONDS = 120;
 
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || '*')
   .split(',')

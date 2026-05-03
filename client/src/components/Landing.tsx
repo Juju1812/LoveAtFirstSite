@@ -1,13 +1,17 @@
 import { useState } from 'react';
+import type { Profile } from '../profile';
+import { hasMeaningfulProfile } from '../profile';
 
 interface LandingProps {
   onStart: () => void;
   starting: boolean;
   mediaError: 'denied' | 'in-use' | 'unavailable' | null;
   onDismissError: () => void;
+  onEditProfile: () => void;
+  profile: Profile | null;
 }
 
-export function Landing({ onStart, starting, mediaError, onDismissError }: LandingProps) {
+export function Landing({ onStart, starting, mediaError, onDismissError, onEditProfile, profile }: LandingProps) {
   if (mediaError) {
     const copy = {
       denied: {
@@ -39,8 +43,8 @@ export function Landing({ onStart, starting, mediaError, onDismissError }: Landi
 
   return (
     <div className="landing">
-      <Nav onStart={onStart} starting={starting} />
-      <Hero onStart={onStart} starting={starting} />
+      <Nav onStart={onStart} starting={starting} onEditProfile={onEditProfile} profile={profile} />
+      <Hero onStart={onStart} starting={starting} onEditProfile={onEditProfile} hasProfile={hasMeaningfulProfile(profile)} />
       <HowItWorks />
       <WhyGlimpse />
       <Safety />
@@ -51,10 +55,16 @@ export function Landing({ onStart, starting, mediaError, onDismissError }: Landi
   );
 }
 
-function Nav({ onStart, starting }: { onStart: () => void; starting: boolean }) {
+function Nav({ onStart, starting, onEditProfile, profile }: {
+  onStart: () => void;
+  starting: boolean;
+  onEditProfile: () => void;
+  profile: Profile | null;
+}) {
   const scrollTo = (id: string) => {
     document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
+  const profileLabel = hasMeaningfulProfile(profile) ? 'Edit profile' : 'Create profile';
   return (
     <nav className="landing-nav">
       <div className="landing-nav-inner">
@@ -68,6 +78,14 @@ function Nav({ onStart, starting }: { onStart: () => void; starting: boolean }) 
           <button onClick={() => scrollTo('safety')}>Safety</button>
           <button onClick={() => scrollTo('faq')}>FAQ</button>
         </div>
+        <button className="nav-profile" onClick={onEditProfile}>
+          {profile?.photo ? (
+            <img className="nav-profile-pic" src={profile.photo} alt="profile" />
+          ) : (
+            <span className="nav-profile-icon">👤</span>
+          )}
+          <span className="nav-profile-label">{profileLabel}</span>
+        </button>
         <button className="cta-pill" onClick={onStart} disabled={starting}>
           {starting ? 'Starting…' : 'Start'}
         </button>
@@ -76,35 +94,37 @@ function Nav({ onStart, starting }: { onStart: () => void; starting: boolean }) 
   );
 }
 
-function Hero({ onStart, starting }: { onStart: () => void; starting: boolean }) {
+function Hero({ onStart, starting, onEditProfile, hasProfile }: {
+  onStart: () => void;
+  starting: boolean;
+  onEditProfile: () => void;
+  hasProfile: boolean;
+}) {
   return (
     <section id="top" className="hero">
       <div className="hero-glow" aria-hidden />
       <div className="hero-inner">
-        <div className="hero-badge">No profile. No bio. No filter.</div>
+        <div className="hero-badge">No account. No filter. Just face-to-face.</div>
         <h1 className="hero-title">
           <span>Skip the bio.</span>
           <span className="hero-title-accent">Start with eye contact.</span>
         </h1>
         <p className="hero-sub">
-          60 seconds. One real face. Find out if you click before either of you can swipe.
+          Two minutes. One real face. The chemistry meter reads the vibe. If you both swipe right, you exchange profiles and keep talking.
         </p>
         <div className="hero-ctas">
           <button className="cta-primary cta-large" onClick={onStart} disabled={starting}>
             {starting ? 'Starting your camera…' : 'Find a match'}
             <span className="cta-arrow">→</span>
           </button>
-          <a className="cta-secondary" href="#how" onClick={(e) => {
-            e.preventDefault();
-            document.getElementById('how')?.scrollIntoView({ behavior: 'smooth' });
-          }}>
-            How it works
-          </a>
+          <button className="cta-secondary" onClick={onEditProfile}>
+            {hasProfile ? 'Edit your profile' : 'Create your profile'}
+          </button>
         </div>
         <div className="hero-trust">
           <span>🔒 No account required</span>
           <span className="hero-trust-dot">•</span>
-          <span>📵 Nothing stored</span>
+          <span>📵 Nothing stored on a server</span>
           <span className="hero-trust-dot">•</span>
           <span>⚡ Instant matches</span>
         </div>
@@ -122,7 +142,7 @@ function HeroVisual() {
           <div className="hero-mock-topbar">
             <span className="hero-mock-brand">Glimpse</span>
             <span className="hero-mock-chemistry">💘 78%</span>
-            <span className="hero-mock-timer">42s</span>
+            <span className="hero-mock-timer">1:24</span>
           </div>
           <div className="hero-mock-stage">
             <div className="hero-mock-remote" />
@@ -140,9 +160,9 @@ function HeroVisual() {
 
 function HowItWorks() {
   const steps = [
-    { n: '01', icon: '🎥', title: 'Tap to match', body: 'One click. Camera turns on, queue finds someone in seconds.' },
-    { n: '02', icon: '⏱️', title: '60 seconds together', body: 'No swiping. No skipping. Just a real face. The chemistry meter reads the vibe in real time.' },
-    { n: '03', icon: '💞', title: 'Both right = match', body: 'When the timer ends and you both swipe right, you keep talking. Anything less, you move on.' }
+    { n: '01', icon: '🎥', title: 'Tap to match', body: 'One click. Camera turns on, queue finds someone in seconds. No signup, no waiting.' },
+    { n: '02', icon: '⏱️', title: 'Two minutes together', body: 'No swiping yet. No skipping. Just a real face on camera. The chemistry meter reads your conversation in real time.' },
+    { n: '03', icon: '💞', title: 'Both right = match', body: 'When the timer ends and you both swipe right, you swap profiles, keep talking, and trade contact. Anything less, you move on.' }
   ];
   return (
     <section id="how" className="section section-how">
@@ -174,7 +194,7 @@ function WhyGlimpse() {
     {
       icon: '⏳',
       title: 'A timer that builds chemistry',
-      body: '60 seconds is too short to be perfect and too long to fake it. So you don\'t.'
+      body: 'Two minutes is too short to fake a personality and too long to coast. You show up or you don\'t.'
     },
     {
       icon: '💬',
@@ -243,8 +263,12 @@ function FAQ() {
       a: 'No. There are no logins, profiles, or signups. You hit the button, your camera turns on, and you\'re in the queue. Done.'
     },
     {
-      q: "Why a 60-second timer?",
-      a: "Long enough to feel a real moment, short enough that you can't fake one. The timer is also why both people stay present — they can't just bail at the first awkward second."
+      q: "Why a 2-minute timer?",
+      a: "Long enough to feel a real moment, short enough that no one's wasting a Saturday. The timer is also why both people stay present — they can't just bail at the first awkward second."
+    },
+    {
+      q: 'Do I need a profile?',
+      a: "No — matching works without one. But if you want the person you matched with to actually know who you are, make a quick profile (name, photo, bio). It's stored on your device, never on a server, and only sent to people you both swipe right on."
     },
     {
       q: 'What is the chemistry score?',
@@ -301,7 +325,7 @@ function FinalCTA({ onStart, starting }: { onStart: () => void; starting: boolea
       <div className="final-card">
         <div className="final-glow" aria-hidden />
         <h2 className="final-title">Your next match is online right now.</h2>
-        <p className="final-sub">It takes 60 seconds. The worst case is you meet someone weird. The best case is you don't.</p>
+        <p className="final-sub">Two minutes of your time. The worst case is you meet someone weird. The best case is you don't.</p>
         <button className="cta-primary cta-large" onClick={onStart} disabled={starting}>
           {starting ? 'Starting your camera…' : 'Find a match'}
           <span className="cta-arrow">→</span>

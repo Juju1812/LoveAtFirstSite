@@ -35,6 +35,7 @@ export interface UseWebRTCOpts {
   role: Role | null;
   signalUrl: string;
   onChatMessage: (msg: string) => void;
+  onProfile: (profile: unknown) => void;
 }
 
 export interface UseWebRTC {
@@ -42,12 +43,13 @@ export interface UseWebRTC {
   remoteStream: MediaStream | null;
   connectionState: RTCPeerConnectionState | 'idle';
   sendChat: (msg: string) => void;
+  sendProfile: (profile: unknown) => void;
   startMedia: () => Promise<MediaStream>;
   stopAll: () => void;
 }
 
 export function useWebRTC(opts: UseWebRTCOpts): UseWebRTC {
-  const { socket, sessionId, role, signalUrl, onChatMessage } = opts;
+  const { socket, sessionId, role, signalUrl, onChatMessage, onProfile } = opts;
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const dcRef = useRef<RTCDataChannel | null>(null);
@@ -61,7 +63,9 @@ export function useWebRTC(opts: UseWebRTCOpts): UseWebRTC {
     useState<RTCPeerConnectionState | 'idle'>('idle');
 
   const onChatMessageRef = useRef(onChatMessage);
+  const onProfileRef = useRef(onProfile);
   useEffect(() => { onChatMessageRef.current = onChatMessage; }, [onChatMessage]);
+  useEffect(() => { onProfileRef.current = onProfile; }, [onProfile]);
 
   const startMedia = useCallback(async () => {
     if (localStreamRef.current) return localStreamRef.current;
@@ -81,6 +85,8 @@ export function useWebRTC(opts: UseWebRTCOpts): UseWebRTC {
         const parsed = JSON.parse(ev.data);
         if (parsed.type === 'chat' && typeof parsed.text === 'string') {
           onChatMessageRef.current(parsed.text);
+        } else if (parsed.type === 'profile') {
+          onProfileRef.current(parsed.profile);
         }
       } catch {
         // ignore
@@ -120,6 +126,13 @@ export function useWebRTC(opts: UseWebRTCOpts): UseWebRTC {
     const dc = dcRef.current;
     if (!dc || dc.readyState !== 'open') return;
     dc.send(JSON.stringify({ type: 'chat', text: msg }));
+  }, []);
+
+  const sendProfile = useCallback((profile: unknown) => {
+    const dc = dcRef.current;
+    if (!dc || dc.readyState !== 'open') return;
+    try { dc.send(JSON.stringify({ type: 'profile', profile })); }
+    catch (err) { console.warn('sendProfile failed', err); }
   }, []);
 
   // Build / tear down the peer connection whenever a session begins or ends.
@@ -221,5 +234,5 @@ export function useWebRTC(opts: UseWebRTCOpts): UseWebRTC {
     };
   }, [socket, sessionId, role, signalUrl, startMedia, wireDataChannel, teardownPeer]);
 
-  return { localStream, remoteStream, connectionState, sendChat, startMedia, stopAll };
+  return { localStream, remoteStream, connectionState, sendChat, sendProfile, startMedia, stopAll };
 }

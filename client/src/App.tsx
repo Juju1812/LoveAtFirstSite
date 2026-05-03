@@ -10,6 +10,8 @@ import { Controls } from './components/Controls';
 import { ChatPanel, type ChatLine } from './components/ChatPanel';
 import { MatchedOverlay } from './components/MatchedOverlay';
 import { Landing } from './components/Landing';
+import { ProfileEditor } from './components/ProfileEditor';
+import { type Profile, loadProfile, saveProfile, sanitizeIncomingProfile } from './profile';
 
 const SIGNAL_URL =
   (import.meta.env.VITE_SIGNAL_URL as string | undefined) ??
@@ -37,6 +39,14 @@ export function App() {
   const [toast, setToast] = useState<string | null>(null);
   const [mediaError, setMediaError] = useState<'denied' | 'in-use' | 'unavailable' | null>(null);
   const [starting, setStarting] = useState(false);
+  const [myProfile, setMyProfile] = useState<Profile | null>(() => loadProfile());
+  const [peerProfile, setPeerProfile] = useState<Profile | null>(null);
+  const [hasSentContact, setHasSentContact] = useState(false);
+  const [showProfileEditor, setShowProfileEditor] = useState(false);
+  const [overlayDismissed, setOverlayDismissed] = useState(false);
+
+  const myProfileRef = useRef(myProfile);
+  useEffect(() => { myProfileRef.current = myProfile; }, [myProfile]);
 
   const socketRef = useRef<Socket | null>(null);
   const chemistryRef = useRef(50);
@@ -55,6 +65,9 @@ export function App() {
       setSwiped(null);
       setPeerLikedYou(false);
       setPeerContact(null);
+      setPeerProfile(null);
+      setHasSentContact(false);
+      setOverlayDismissed(false);
       setChemistry(50);
       setPhase('connecting');
     });
@@ -74,6 +87,7 @@ export function App() {
     socket.on('matched', ({ chemistry: c }: { chemistry: number }) => {
       setChemistry(c);
       setPhase('matched');
+      setOverlayDismissed(false);
     });
 
     socket.on('peer-left', () => {
@@ -134,12 +148,18 @@ export function App() {
     });
   }, [session?.sessionId]);
 
-  const { localStream, remoteStream, connectionState, sendChat, startMedia, stopAll } = useWebRTC({
+  const onProfileReceived = useCallback((raw: unknown) => {
+    const sanitized = sanitizeIncomingProfile(raw);
+    setPeerProfile(sanitized);
+  }, []);
+
+  const { localStream, remoteStream, connectionState, sendChat, sendProfile, startMedia, stopAll } = useWebRTC({
     socket: socketRef.current,
     sessionId: session?.sessionId ?? null,
     role: session?.role ?? null,
     signalUrl: SIGNAL_URL,
-    onChatMessage
+    onChatMessage,
+    onProfile: onProfileReceived
   });
 
   // Live speech-to-text on local mic — drives the chemistry meter from actual
@@ -161,6 +181,16 @@ export function App() {
     active: phase === 'live' || phase === 'matched',
     onTranscript: onSpokenTranscript
   });
+
+  // When we transition to 'matched', send our profile to the peer.
+  useEffect(() => {
+    if (phase !== 'matched') return;
+    const p = myProfileRef.current;
+    if (!p) return;
+    // Slight delay to let the matched event settle on both ends.
+    const id = setTimeout(() => sendProfile(p), 200);
+    return () => clearTimeout(id);
+  }, [phase, sendProfile]);
 
   // Once WebRTC is connected, transition to "live".
   useEffect(() => {
@@ -234,21 +264,35 @@ export function App() {
   const shareContact = useCallback((contact: string) => {
     if (!session) return;
     socketRef.current?.emit('share-contact', { sessionId: session.sessionId, contact });
+    setHasSentContact(true);
   }, [session]);
+
+  const handleSaveProfile = useCallback((p: Profile) => {
+    saveProfile(p);
+    setMyProfile(p);
+    setShowProfileEditor(false);
+  }, []);
 
   const leaveMatch = useCallback(() => {
     setPhase('idle');
     setSession(null);
     setPeerContact(null);
+    setPeerProfile(null);
     setChatLines([]);
     setSwiped(null);
     setPeerLikedYou(false);
+    setHasSentContact(false);
+    setOverlayDismissed(false);
     stopAll();
   }, [stopAll]);
 
+  const continueChatting = useCallback(() => {
+    setOverlayDismissed(true);
+  }, []);
+
   // ---- Timer math ----
   const secondsLeft = useMemo(() => {
-    if (!session || phase !== 'live') return session?.timerSeconds ?? 60;
+    if (!session || phase !== 'live') return session?.timerSeconds ?? 120;
     const elapsed = (now - session.startedAt) / 1000;
     return Math.max(0, Math.ceil(session.timerSeconds - elapsed));
   }, [session, now, phase]);
@@ -258,12 +302,23 @@ export function App() {
   // ---- Render ----
   if (phase === 'idle') {
     return (
-      <Landing
-        onStart={startMatching}
-        starting={starting}
-        mediaError={mediaError}
-        onDismissError={() => setMediaError(null)}
-      />
+      <>
+        <Landing
+          onStart={startMatching}
+          starting={starting}
+          mediaError={mediaError}
+          onDismissError={() => setMediaError(null)}
+          onEditProfile={() => setShowProfileEditor(true)}
+          profile={myProfile}
+        />
+        {showProfileEditor && (
+          <ProfileEditor
+            initial={myProfile}
+            onSave={handleSaveProfile}
+            onCancel={() => setShowProfileEditor(false)}
+          />
+        )}
+      </>
     );
   }
 
@@ -312,13 +367,27 @@ export function App() {
 
       {toast && <div className="toast">{toast}</div>}
 
-      {phase === 'matched' && (
+      {phase === 'matched' && !overlayDismissed && (
         <MatchedOverlay
           chemistry={chemistry}
+          peerProfile={peerProfile}
+          myProfile={myProfile}
           peerContact={peerContact}
+          hasSentContact={hasSentContact}
           onShareContact={shareContact}
+          onContinue={continueChatting}
           onLeave={leaveMatch}
         />
+      )}
+
+      {phase === 'matched' && overlayDismissed && (
+        <button
+          className="reopen-match-btn"
+          onClick={() => setOverlayDismissed(false)}
+          title="Reopen match details"
+        >
+          💞 Match details
+        </button>
       )}
     </div>
   );
